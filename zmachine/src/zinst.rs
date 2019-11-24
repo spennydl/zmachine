@@ -29,8 +29,42 @@ bitstruct! {
         arg2_type: VarArg2, Width = U2, Offset = U4,
         arg3_type: VarArg3, Width = U2, Offset = U2,
         arg4_type: VarArg4, Width = U2, Offset = U0
+    },
+
+    BranchLabel: u16 {
+        invert: BranchInv, Width = U1, Offset = U15,
+        offset: BranchOffset, Width = U1, Offset = U14,
+        unsigned_value: BranchUnsignedValue, Width = U6, Offset = U8,
+        sign: BranchSign, Width = U1, Offset = U14,
+        signed_value: BranchSignedValue, Width = U13, Offset = U0
     }
 }
+
+/*
+fn branch_if(&self, mem: &mut ZMemory, pc: &mut u16, cond: bool) {
+    let branch_hi = mem.read_byte(*pc);
+    *pc += 1;
+
+    let inv = branch_hi & 0x80 > 0;
+    let mut offset: i32 = 0;
+    if branch_hi & 0x40 > 0 {
+        offset = (branch_hi & 0x3F) as i32;
+    } else {
+        let neg = branch_hi & 0x20 > 0;
+        let val = branch_hi & 0x1F;
+        let low = mem.read_byte(*pc);
+        *pc += 1;
+        offset = ((val as u16) << 8 | low as u16) as i32;
+        if neg {
+            offset = offset * -1;
+        }
+    }
+
+    if (cond && !inv) || (!cond && inv) {
+        *pc = ((*pc as i32) + offset as i32) as u16 - 2; // minus 2 for some reason?
+    }
+}
+*/
 
 trait InstrTypeProvider {
     fn instr_type(&self) -> InstructionType;
@@ -63,6 +97,13 @@ pub(crate) enum Address {
     StackPointer,
     Local(u16),
     Global(u16),
+    Word(u16),
+}
+
+impl Default for Address {
+    fn default() -> Address {
+        Address::StackPointer
+    }
 }
 
 impl Address {
@@ -70,10 +111,10 @@ impl Address {
         if addr == 0 {
             Address::StackPointer
         } else if addr < 0x10 {
-            Address::Local(addr)
+            Address::Local(addr - 1)
         } else {
             Address::Global(addr - 0x10)
-        }
+        } // there is no reason to create word addr this way
     }
 
     pub(crate) fn addr(&self) -> u16 {
@@ -81,6 +122,7 @@ impl Address {
             Address::StackPointer => 0,
             Address::Local(v) => *v,
             Address::Global(v) => *v,
+            Address::Word(v) => *v,
         }
     }
 }

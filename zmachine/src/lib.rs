@@ -7,6 +7,7 @@ mod zmachine;
 mod zmemory;
 mod zinst;
 mod constants;
+mod zmath;
 
 #[macro_use]
 extern crate typenum;
