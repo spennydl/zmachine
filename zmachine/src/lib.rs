@@ -1,7 +1,17 @@
+#![recursion_limit = "512"]
+
+#[macro_use]
+mod bits;
+
 mod zmachine;
 mod zmemory;
+mod zinst;
+mod constants;
 
-pub use zmachine::{ZMachine, ZMachineState};
+#[macro_use]
+extern crate typenum;
+
+pub use zmachine::{ZMachine};
 
 #[cfg(test)]
 mod tests {

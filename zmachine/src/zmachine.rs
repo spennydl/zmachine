@@ -5,6 +5,8 @@ use std::io::BufReader;
 use std::fs::File;
 use std::cell::RefCell;
 
+use crate::zinst::{Instruction, InstructionType, Operand, Address};
+
 #[derive(Default, Debug)]
 pub struct StackFrame {
     locals: Vec<u16>,
@@ -13,150 +15,11 @@ pub struct StackFrame {
     pc: u16,
 }
 
-#[derive(Default, Debug)]
-pub struct ZMachineState {
-    machine_version: u8,
-    stack: Vec<StackFrame>,
-    current: RefCell<StackFrame>,
-}
-
-impl ZMachineState {
-    pub fn reset(&mut self, header: &[u8]) {
-        self.machine_version = header[0];
-
-        self.stack = Vec::new();
-        self.current.replace(StackFrame::default());
-
-        let mut val = header[6] as u16;
-        val = (val << 8) | header[7] as u16;
-        self.current.get_mut().pc = val;
-    }
-
-    pub fn push_frame(&mut self, frame: StackFrame) {
-        println!("Pushing frame: {:x?}", frame);
-        self.stack.push(self.current.replace(frame));
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum Operand {
-    SmallConstant(u8),
-    Variable(u8),
-    LargeConstant(u16),
-}
-
-impl Operand {
-    #[inline]
-    pub fn get_value(&self, state: &mut ZMachineState) -> i32 {
-        match self {
-            Operand::SmallConstant(v) => *v as i32,
-            Operand::LargeConstant(v) => *v as i32,
-            Operand::Variable(addr) => {
-                let frame = state.current.get_mut();
-                if *addr == 0 {
-                    frame.stack.pop().expect("blown the stack") as i32
-                } else if *addr >= 0x10 {
-                    // global, not implemented yet
-                    0
-                } else {
-                    frame.locals[*addr as usize] as i32
-                }
-            }
-        }
-    }
-}
 
 #[derive(Default, Debug)]
 pub struct ZMachine {
-    memory: ZMemory,
-    state: ZMachineState,
-}
-
-#[derive(Default, Debug)]
-struct Instruction {
-    pub(crate) operands: Vec<Operand>,
-    pub(crate) store: u8,
-    pub(crate) jump: u16
-}
-
-impl Instruction {
-    #[inline]
-    pub fn new() -> Self {
-        Instruction {
-            operands: Vec::new(),
-            store: 0,
-            jump: 0
-        }
-    }
-
-    #[inline]
-    pub fn long(raw: u8, mem: &ZMemory, pc: &mut u16) -> Instruction {
-        let mut instr = Instruction::new();
-        if raw & 0x40 > 0 {
-            instr.operands.push(Operand::Variable(mem.read_byte(*pc)));
-        } else {
-            instr.operands.push(Operand::SmallConstant(mem.read_byte(*pc)));
-        }
-        *pc += 1;
-
-        if raw & 0x20 > 0 {
-            instr.operands.push(Operand::Variable(mem.read_byte(*pc)));
-        } else {
-            instr.operands.push(Operand::SmallConstant(mem.read_byte(*pc)));
-        }
-        *pc += 1;
-
-        instr
-    }
-
-    #[inline]
-    pub fn long_store(raw: u8, mem: &ZMemory, pc: &mut u16) -> Instruction {
-        let mut instr = Instruction::long(raw, mem, pc);
-        instr.store = mem.read_byte(*pc);
-        *pc += 1;
-
-        instr
-    }
-
-    #[inline]
-    pub fn variable(mem: &ZMemory, pc: &mut u16) -> Instruction {
-        let mut result = Instruction::new();
-        let mut types = mem.read_byte(*pc);
-        *pc += 1;
-
-        while types > 0 {
-            let cur = types & 0xC0;
-            match cur {
-                0x00 => { // large constant
-                    let val = mem.read_word(*pc);
-                    *pc += 2;
-                    result.operands.push(Operand::LargeConstant(val));
-                },
-                0x40 => { // small constant
-                    let val = mem.read_byte(*pc);
-                    *pc += 1;
-                    result.operands.push(Operand::SmallConstant(val));
-                },
-                0x80 => { // variable
-                    let val = mem.read_byte(*pc);
-                    *pc += 1;
-                    result.operands.push(Operand::Variable(val));
-                },
-                _ => break,
-            };
-            types <<= 2;
-        };
-        result
-    }
-
-    #[inline]
-    pub fn variable_store(mem: &ZMemory, pc: &mut u16) -> Instruction {
-        let mut result = Instruction::variable(mem, pc);
-        result.store = mem.read_byte(*pc);
-        *pc += 1;
-
-        result
-    }
+    memory: RefCell<ZMemory>,
+    stack: RefCell<Vec<StackFrame>>,
 }
 
 impl ZMachine {
@@ -164,74 +27,194 @@ impl ZMachine {
         ZMachine::default()
     }
 
+    fn reset(&mut self, buf: Vec<u8>) {
+        let mut mem = self.memory.borrow_mut();
+        mem.reset(buf);
+
+        let header = mem.header();
+        self.stack.replace(vec![StackFrame::default()]);
+
+        let mut stack = self.stack.borrow_mut();
+        let current = &mut stack[0];
+        let mut pc = header[6] as u16;
+        pc = (pc << 8) | header[7] as u16;
+        current.pc = pc;
+    }
+
     pub fn load(&mut self, filename: &str) -> std::io::Result<()> {
         let f = File::open(filename)?;
         let mut reader = BufReader::new(f);
         let mut buf: Vec<u8> = Vec::new();
-
         reader.read_to_end(&mut buf)?;
-        self.memory.reset(buf);
 
-        self.state.reset(&self.memory.header());
+        self.reset(buf);
 
-        println!("Version: {}", self.state.machine_version);
-        println!("PC: {:x}", self.state.current.borrow().pc);
+        let current_frame = &self.stack.borrow()[0];
+        println!("PC: {:x}", current_frame.pc);
         Ok(())
     }
 
-    pub fn exec_one(&mut self) -> bool {
-        let frame = &mut self.state.current.get_mut();
-        let opcode = self.memory.read_byte(frame.pc);
-        frame.pc += 1;
+    fn fetch_next_instr(&self) -> Instruction {
+        let mut stack = self.stack.borrow_mut();
+        let mem = self.memory.borrow();
 
-        if opcode & 0xC0 == 0xC0 { // variable
-            match opcode & 0x0F {
-                0 => { // call
-                    let instruction = Instruction::variable_store(&self.memory, &mut frame.pc);
-                    println!("var instruction: {:x?}", instruction);
+        let idx = stack.len() - 1;
+        let frame = &mut stack[idx];
 
-                    let routine_addr = instruction.operands[0].get_value(&mut self.state) as u16 * 2;
-                    let mut locals: Vec<u16> = Vec::new();
-                    let n_locals = self.memory.read_byte(routine_addr) as u16;
+        let (instr, offset) = Instruction::from_mem(mem.slice(frame.pc as usize));
+        frame.pc += offset as u16;
 
-                    for i in 0..n_locals {
-                        locals.push(self.memory.read_word(routine_addr + 1 + i * 2));
+        instr
+    }
+
+    pub fn exec_one(&self) -> bool {
+        let instr = self.fetch_next_instr();
+
+        let mut stack = self.stack.borrow_mut();
+        let mut mem = self.memory.borrow_mut();
+        // TODO: better stack
+        let idx = stack.len() - 1;
+        let mut current_frame = &mut stack[idx];
+
+        match instr.ty {
+            InstructionType::Long => {
+                match instr.opcode {
+                    1 => { // jump equal
+                        println!("Jump equal: {:?}", instr);
+
+                        let lhs = self.get_value(&instr.ops[0], &mut mem, &mut current_frame);
+                        let rhs = self.get_value(&instr.ops[1], &mut mem, &mut current_frame);
+
+                        println!("operands: {} {}", lhs, rhs);
+                        self.branch_if(&mut mem, &mut current_frame.pc, lhs == rhs);
+                        return true;
                     }
+                    3 => { // jump greater than
+                        println!("jg: {:?}", instr);
+                    },
+                    20 => { // add
+                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        println!("add: {:?} {:?}", instr, store);
+                        current_frame.pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mut mem, &mut current_frame);
+                        let rhs = self.get_value(&instr.ops[1], &mut mem, &mut current_frame);
 
-                    for (n, op) in instruction.operands[1..].iter().enumerate() {
-                        locals[n] = op.get_value(&mut self.state) as u16
+                        let result = lhs + rhs;
+                        self.store(result, &store, &mut mem, &mut current_frame);
+
+                        return true;
+                    },
+                    21 => { // sub
+                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        println!("sub: {:?} {:?}", instr, store);
+                        current_frame.pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mut mem, &mut current_frame);
+                        let rhs = self.get_value(&instr.ops[1], &mut mem, &mut current_frame);
+
+                        let result = lhs - rhs;
+                        self.store(result, &store, &mut mem, &mut current_frame);
+
+                        return true;
                     }
-
-                    self.state.push_frame(StackFrame {
-                        locals: locals,
-                        stack: Vec::new(),
-                        pc: routine_addr + 1 + n_locals * 2,
-                        ret_addr: instruction.store,
-                    });
-
-                    return true;
-                },
-                code => println!("Unimplemented variable: raw {} opcode {}", opcode, code),
-            }
-        } else if opcode & 0xC0 == 0x80 { // short
-            match opcode & 0x0F {
-                code => println!("Unimplemented short: raw {} opcode {}", opcode, code),
-            }
-
-        } else { // long
-            match opcode & 0x1F {
-                3 => { // jump greater than
-                    let instruction = Instruction::long_store(opcode, &self.memory, &mut frame.pc);
-                    println!("jg: {:?}", instruction);
+                    code => println!("Unimplemented long: raw {} opcode {}", instr.opcode, code),
                 }
-                code => println!("Unimplemented long: raw {} opcode {}", opcode, code),
+
+            },
+            InstructionType::Short => {
+                match instr.opcode {
+                    _ => println!("Unimplemented short: {:?}", instr),
+                }
+            },
+            InstructionType::Variable => {
+                match instr.opcode {
+                    0 => { // call
+                        println!("var instruction: {:x?}", instr);
+                        let store = mem.read_byte(current_frame.pc);
+                        current_frame.pc += 1;
+
+                        let routine_addr = instr.ops[0].value() * 2;
+                        let mut locals: Vec<u16> = Vec::new();
+                        let n_locals = mem.read_byte(routine_addr) as u16;
+
+                        for i in 0..n_locals {
+                            locals.push(mem.read_word(routine_addr + 1 + i * 2));
+                        }
+
+                        for (n, op) in instr.ops[1..].iter().enumerate() {
+                            locals[n] = op.value();
+                        }
+
+                        stack.push(StackFrame {
+                            locals,
+                            stack: Vec::new(),
+                            pc: routine_addr + 1 + n_locals * 2,
+                            ret_addr: store,
+                        });
+
+                        return true;
+                    },
+                    code => println!("Unimplemented variable: raw {} opcode {}", instr.opcode, code),
+                }
             }
         }
 
         false
     }
 
-    fn store(&mut self, val: u8, addr: u8) {
+    fn branch_if(&self, mem: &mut ZMemory, pc: &mut u16, cond: bool) {
+        let branch_hi = mem.read_byte(*pc);
+        *pc += 1;
 
+        let inv = branch_hi & 0x80 > 0;
+        let mut offset: i32 = 0;
+        if branch_hi & 0x40 > 0 {
+            offset = (branch_hi & 0x3F) as i32;
+        } else {
+            let neg = branch_hi & 0x20 > 0;
+            let val = branch_hi & 0x1F;
+            let low = mem.read_byte(*pc);
+            *pc += 1;
+            offset = ((val as u16) << 8 | low as u16) as i32;
+            if neg {
+                offset = offset * -1;
+            }
+        }
+
+        if (cond && !inv) || (!cond && inv) {
+            *pc = ((*pc as i32) + offset as i32) as u16 - 2; // minus 2 for some reason?
+        }
+    }
+
+    fn store(&self, val: u16, addr: &Address, mem: &mut ZMemory, frame: &mut StackFrame) {
+        match addr {
+            Address::Global(a) => {
+                mem.set_global(*a as u8, val);
+            },
+            Address::StackPointer => {
+                frame.stack.push(val);
+            },
+            Address::Local(a) => {
+                frame.locals[*a as usize] = val;
+            }
+        }
+    }
+
+    fn get_value(&self, v: &Operand, mem: &mut ZMemory, frame: &mut StackFrame) -> u16 {
+        match v {
+            Operand::Variable(a) => {
+                match a {
+                    Address::Global(addr) => {
+                        mem.global(*addr as u8) as u16
+                    },
+                    Address::StackPointer => {
+                        frame.stack.pop().expect("blew the stack")
+                    },
+                    Address::Local(addr) => {
+                        frame.locals[*addr as usize]
+                    }
+                }
+            },
+            _ => v.value(),
+        }
     }
 }
