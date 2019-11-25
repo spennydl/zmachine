@@ -6,14 +6,14 @@ use std::fs::File;
 use std::cell::RefCell;
 
 use crate::zinst::{Instruction, InstructionType, Operand, Address, BranchLabel};
-use crate::zmath::ZSigned;
+use crate::bits::ZWord;
 
 #[derive(Default, Debug)]
 pub struct StackFrame {
     locals: Vec<u16>,
     stack: Vec<u16>,
     ret_addr: Address,
-    pc: u16,
+    pc: usize,
 }
 
 
@@ -37,9 +37,9 @@ impl ZMachine {
 
         let mut stack = self.stack.borrow_mut();
         let current = &mut stack[0];
-        let mut pc = header[6] as u16;
-        pc = (pc << 8) | header[7] as u16;
-        current.pc = pc;
+
+        let pc: ZWord = (header[6], header[7]).into();
+        current.pc = u16::from(pc) as usize;
     }
 
     pub fn load(&mut self, filename: &str) -> std::io::Result<()> {
@@ -62,8 +62,8 @@ impl ZMachine {
         let idx = stack.len() - 1;
         let frame = &mut stack[idx];
 
-        let (instr, offset) = Instruction::from_mem(mem.slice(frame.pc as usize));
-        frame.pc += offset as u16;
+        let (instr, offset) = Instruction::from_mem(mem.slice(frame.pc));
+        frame.pc += offset;
 
         instr
     }
@@ -168,12 +168,12 @@ impl ZMachine {
                         let store = Address::of(mem.read_byte(current_frame.pc) as u16);
                         current_frame.pc += 1;
 
-                        let routine_addr = instr.ops[0].value() * 2;
+                        let routine_addr = instr.ops[0].value() as usize * 2;
                         let mut locals: Vec<u16> = Vec::new();
                         let n_locals = mem.read_byte(routine_addr) as u16;
 
                         for i in 0..n_locals {
-                            locals.push(mem.read_word(routine_addr + 1 + i * 2));
+                            locals.push(mem.read_word(routine_addr as usize + 1 + i as usize * 2).into());
                         }
 
                         for (n, op) in instr.ops[1..].iter().enumerate() {
@@ -183,7 +183,7 @@ impl ZMachine {
                         stack.push(StackFrame {
                             locals,
                             stack: Vec::new(),
-                            pc: routine_addr + 1 + n_locals * 2,
+                            pc: routine_addr as usize + 1 + n_locals as usize * 2,
                             ret_addr: store,
                         });
 
@@ -201,8 +201,13 @@ impl ZMachine {
                         return true
                     },
                     3 => { // put prop - objects eek!
-                        println!("put prop");
-                        println!("Unimplemented variable: instr {:?} pc {:x}", instr, current_frame.pc)
+                        println!("put prop: instr {:?} pc {:x}", instr, current_frame.pc);
+                        let obj_num = self.get_value(&instr.ops[0], &mut mem, &mut current_frame);
+                        let prop_num = self.get_value(&instr.ops[1], &mut mem, &mut current_frame) as u8;
+                        let val = self.get_value(&instr.ops[2], &mut mem, &mut current_frame);
+                        
+                        mem.put_prop(obj_num as usize, prop_num, val.into());
+                        return true
                     },
                     code => println!("Unimplemented variable: instr {:?} pc {:x}", instr, current_frame.pc),
                 }
@@ -212,8 +217,8 @@ impl ZMachine {
         false
     }
 
-    fn branch_if(&self, mem: &mut ZMemory, pc: &mut u16, cond: bool) {
-        let val = mem.read_word(*pc);
+    fn branch_if(&self, mem: &mut ZMemory, pc: &mut usize, cond: bool) {
+        let val = mem.read_word(*pc).into();
         let branch_label = BranchLabel::new(val);
 
         let target = branch_label.invert.is_set();
@@ -232,7 +237,7 @@ impl ZMachine {
 
         println!("offset is {}", offset);
         if cond == target {
-            let new_pc = ((*pc as i16) + offset) as u16 - 2;
+            let new_pc = ((*pc as i16) + offset) as usize - 2;
             println!("branching, pc is now {:x}", new_pc);
             *pc = new_pc;
         }
@@ -241,7 +246,7 @@ impl ZMachine {
     fn store(&self, val: u16, addr: &Address, mem: &mut ZMemory, frame: &mut StackFrame) {
         match addr {
             Address::Global(a) => {
-                mem.set_global(*a as u8, val);
+                mem.set_global(*a as usize, val.into());
             },
             Address::StackPointer => {
                 frame.stack.push(val);
@@ -250,7 +255,7 @@ impl ZMachine {
                 frame.locals[*a as usize] = val;
             },
             Address::Word(a) => {
-                mem.set_word(*a as usize, val);
+                mem.set_word(*a as usize, val.into());
             },
         }
     }
@@ -260,7 +265,7 @@ impl ZMachine {
             Operand::Variable(a) => {
                 match a {
                     Address::Global(addr) => {
-                        mem.global(*addr as u8) as u16
+                        mem.global(*addr as usize).into()
                     },
                     Address::StackPointer => {
                         frame.stack.pop().expect("blew the stack")
@@ -269,7 +274,7 @@ impl ZMachine {
                         frame.locals[*addr as usize]
                     },
                     Address::Word(addr) => {
-                        mem.read_word(*addr)
+                        mem.read_word(*addr as usize).into()
                     },
                 }
             },

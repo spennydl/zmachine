@@ -4,10 +4,22 @@ use std::marker::PhantomData;
 
 pub struct ZWord(u16);
 
+impl From<ZWord> for (u8, u8) {
+    fn from(v: ZWord) -> (u8, u8) {
+        ((v.0 >> 8) as u8, (v.0 | 0x00ff) as u8)
+    }
+}
+
 impl From<(u8, u8)> for ZWord {
     fn from(v: (u8, u8)) -> ZWord {
         let (hi, lo) = v;
-        ZWord(((hi as u16) << 8) | lo as u16)
+        ZWord((hi as u16) << 8 | lo as u16)
+    }
+}
+
+impl From<u16> for ZWord {
+    fn from(v: u16) -> ZWord {
+        ZWord(v)
     }
 }
 
