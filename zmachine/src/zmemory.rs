@@ -1,24 +1,33 @@
 use crate::bits::ZWord;
+use crate::zstr::ZCharIter;
 use typenum::{U0, U3, U5};
+use std::convert::AsRef;
 
-pub struct ZGlobals<'a> {
-    table: &'a mut [u8]
+pub struct ZGlobals<T: AsRef<[u8]>> {
+    table: T
 }
 
-impl<'a> ZGlobals<'a> {
-    fn new(table: &'a mut [u8]) -> ZGlobals<'a> {
+impl<T: AsRef<[u8]>> ZGlobals<T> {
+    fn new(table: T) -> ZGlobals<T> {
         ZGlobals { table }
     }
 
     fn get(&self, idx: usize) -> ZWord {
+        let table = self.table.as_ref();
+
         let idx = idx * 2;
-        (self.table[idx], self.table[idx + 1]).into()
+        (table[idx], table[idx + 1]).into()
     }
 
+}
+
+impl <T: AsRef<[u8]> + AsMut<[u8]>> ZGlobals<T> {
     fn set(&mut self, idx: usize, val: ZWord) {
+        let table = self.table.as_mut();
+
         let (hi, lo) = val.into();
-        self.table[idx] = hi;
-        self.table[idx + 1] = lo;
+        table[idx] = hi;
+        table[idx + 1] = lo;
     }
 }
 
@@ -47,29 +56,6 @@ impl ZObjectEntry {
         }
     }
 }
-
-/*
-pub(crate) struct ZObjectIter<'a> {
-    table: &'a mut [u8],
-    idx: usize,
-}
-
-impl<'a> ZObjectIter<'a> {
-    fn new(table: &'a mut [u8]) -> ZObjectIter {
-        let idx = 62;
-
-        ZObjectIter { table, idx }
-    }
-}
-
-impl<'a> Iterator for ZObjectIter<'a> {
-    type Item = ZObjectEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None
-    }
-}
-*/
 
 bitstruct! {
     PropertySize: u8 {
@@ -110,29 +96,6 @@ pub(crate) struct ZObjectProps<'a> {
     props: &'a mut [u8]
 }
 
-/*
-struct ZObjectPropsIter<'a> {
-    props: &'a mut [u8],
-    idx: usize,
-}
-
-impl<'a> Iterator for ZObjectPropsIter<'a> {
-    type Item = ZObjectProperty<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let idx = self.idx;
-        self.idx += 9;
-
-        let prop = ZObjectProperty::new(self.props[idx], &mut self.props[idx + 1..]);
-        if prop.number() == 0 {
-            None
-        } else {
-            Some(prop)
-        }
-    }
-}
-*/
-
 impl<'a> ZObjectProps<'a> {
     fn new(props: &'a mut [u8]) -> ZObjectProps<'a> {
         ZObjectProps { props }
@@ -158,19 +121,20 @@ impl<'a> ZObjectProps<'a> {
     }
 }
 
-pub(crate) struct ZObjectTable<'a> {
-    table: &'a mut [u8]
+pub(crate) struct ZObjectTable<T: AsRef<[u8]>> {
+    table: T
 }
 
-impl<'a> ZObjectTable<'a> {
-    fn new(table: &'a mut [u8]) -> ZObjectTable<'a> {
+impl<T: AsRef<[u8]>> ZObjectTable<T> {
+    fn new(table: T) -> ZObjectTable<T> {
         ZObjectTable { table }
     }
 
-    fn get_object(&mut self, obj: usize) -> ZObjectEntry {
+    fn get_object(&self, obj: u8) -> ZObjectEntry {
         // skip the defaults table
-        let objects = &self.table[62..];
-        let obj_idx = obj * 9; //entries are 9 bytes
+        let table = self.table.as_ref();
+        let objects = &table[62..];
+        let obj_idx = obj as usize * 9; //entries are 9 bytes
 
         ZObjectEntry::new(&objects[obj_idx..obj_idx + 9])
     }
@@ -181,6 +145,7 @@ pub(crate) struct ZMemory {
     bytes: Vec<u8>,
     globals_idx: usize,
     objects_idx: usize,
+    abbrev_idx: usize
 }
 
 impl ZMemory {
@@ -204,11 +169,26 @@ impl ZMemory {
         let objects_idx = self.read_word(0x0A);
         self.objects_idx = u16::from(objects_idx) as usize;
         println!("objects at {:x}", self.objects_idx);
+
+        let abbrev_idx = self.read_word(0x18);
+        self.abbrev_idx = u16::from(abbrev_idx) as usize;
+        println!("abbreviations table at {:x}", self.abbrev_idx);
     }
 
-    pub(crate) fn put_prop(&mut self, obj_idx: usize, prop_num: u8, val: ZWord) {
+    fn get_object(&self, obj_num: u8) -> ZObjectEntry {
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
+            .get_object(obj_num)
+    }
+
+    pub(crate) fn test_attr(&self, obj_num: u8, attr: u8) -> bool {
+        let obj = self.get_object(obj_num);
+
+        obj.attributes & (1 << attr) > 0
+    }
+
+    pub(crate) fn put_prop(&mut self, obj_num: u8, prop_num: u8, val: ZWord) {
         let address: u16 = ZObjectTable::new(&mut self.bytes[self.objects_idx..])
-            .get_object(obj_idx)
+            .get_object(obj_num)
             .properties.into();
 
         let property = ZObjectProps::new(&mut self.bytes[address as usize..]);
@@ -216,12 +196,17 @@ impl ZMemory {
         property.put(prop_num, val);
     }
 
+    pub(crate) fn read_string(&self, addr: u16) -> String {
+        let idx = addr as usize;
+        ZCharIter::new(&self.bytes[idx..], &self.bytes[self.abbrev_idx..]).collect()
+    }
+
     pub(crate) fn header(&self) -> &[u8] {
         &self.bytes[0..64]
     }
 
-    pub(crate) fn global(&mut self, idx: usize) -> ZWord {
-        ZGlobals::new(&mut self.bytes[self.globals_idx..])
+    pub(crate) fn global(&self, idx: usize) -> ZWord {
+        ZGlobals::new(&self.bytes[self.globals_idx..])
             .get(idx)
     }
 
@@ -240,5 +225,6 @@ impl ZMemory {
     pub(crate) fn slice(&self, idx: usize) -> &[u8] {
         &self.bytes[idx..]
     }
+
 }
 

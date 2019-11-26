@@ -6,6 +6,7 @@ mod bits;
 mod zmachine;
 mod zmemory;
 mod zinst;
+mod zstr;
 mod constants;
 
 #[macro_use]

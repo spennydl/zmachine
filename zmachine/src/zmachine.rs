@@ -93,6 +93,22 @@ impl ZMachine {
                     3 => { // jump greater than
                         println!("jg: {:?}", instr);
                     },
+                    10 => { // test_attr
+                        let obj_num = self.get_value(&instr.ops[0], &mut mem, &mut current_frame);
+                        let attr = self.get_value(&instr.ops[1], &mut mem, &mut current_frame);
+
+                        let attr = mem.test_attr(obj_num as u8, attr as u8);
+                        self.branch_if(&mut mem, &mut current_frame.pc, attr);
+
+                        return true;
+                    },
+                    13 => { // store
+                        let addr = Address::of(self.get_value(&instr.ops[0], &mut mem, &mut current_frame));
+                        let val = self.get_value(&instr.ops[1], &mut mem, &mut current_frame);
+
+                        self.store(val, &addr, &mut mem, &mut current_frame);
+                        return true;
+                    },
                     15 => { // loadw
                         println!("loadw {:?}", instr);
                         let store = Address::of(mem.read_byte(current_frame.pc) as u16);
@@ -148,6 +164,22 @@ impl ZMachine {
                         println!("operands: {}", val);
                         self.branch_if(&mut mem, &mut current_frame.pc, val == 0);
                         return true;
+                    },
+                    2 => { // PRINT!!!!
+                        println!("print: {:?}", instr);
+                        // break this for now
+                        return false;
+
+                        /*
+                        let offset = 0;
+                        let message  = mem.read_string(current_frame.pc as u16);
+                        current_frame.pc += offset;
+
+                        for line in message.lines() {
+                            println!("ZZZZZ  {}", line);
+                        }
+                        return true;
+                        */
                     },
                     11 => { // return value
                         let ret_val = self.get_value(&instr.ops[0], &mut mem, &mut current_frame) as u16;
@@ -206,7 +238,7 @@ impl ZMachine {
                         let prop_num = self.get_value(&instr.ops[1], &mut mem, &mut current_frame) as u8;
                         let val = self.get_value(&instr.ops[2], &mut mem, &mut current_frame);
                         
-                        mem.put_prop(obj_num as usize, prop_num, val.into());
+                        mem.put_prop(obj_num as u8, prop_num, val.into());
                         return true
                     },
                     code => println!("Unimplemented variable: instr {:?} pc {:x}", instr, current_frame.pc),
