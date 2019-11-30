@@ -1,5 +1,5 @@
 use crate::bits::ZWord;
-use crate::zstr::ZCharIter;
+use crate::zstr::ZString;
 use typenum::{U0, U3, U5};
 use std::convert::AsRef;
 
@@ -196,9 +196,12 @@ impl ZMemory {
         property.put(prop_num, val);
     }
 
-    pub(crate) fn read_string(&self, addr: u16) -> String {
+    pub(crate) fn read_string(&self, addr: u16) -> (String, usize) {
         let idx = addr as usize;
-        ZCharIter::new(&self.bytes[idx..], &self.bytes[self.abbrev_idx..]).collect()
+        let zstr = ZString::new(&self.bytes[idx..], &self.bytes[self.abbrev_idx..]);
+        let offset = zstr.offset();
+
+        (zstr.string(), offset)
     }
 
     pub(crate) fn header(&self) -> &[u8] {

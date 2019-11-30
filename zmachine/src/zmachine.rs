@@ -167,19 +167,14 @@ impl ZMachine {
                     },
                     2 => { // PRINT!!!!
                         println!("print: {:?}", instr);
-                        // break this for now
-                        return false;
 
-                        /*
-                        let offset = 0;
-                        let message  = mem.read_string(current_frame.pc as u16);
+                        let (message, offset) = mem.read_string(current_frame.pc as u16);
                         current_frame.pc += offset;
 
                         for line in message.lines() {
                             println!("ZZZZZ  {}", line);
                         }
                         return true;
-                        */
                     },
                     11 => { // return value
                         let ret_val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u16;
