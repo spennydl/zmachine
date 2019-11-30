@@ -82,7 +82,7 @@ impl InstrTypeProvider for Opcode {
 
 #[derive(Debug)]
 pub(crate) enum InstructionType {
-    Long, Short, Variable
+    Long, Short, Variable, ZeroOps
 }
 
 #[derive(Debug)]
@@ -178,6 +178,7 @@ impl Instruction {
                     ops: operands,
                 }, offset)
             },
+            InstructionType::ZeroOps |
             InstructionType::Short => {
                 let instr = ShortInstruction::new(mem[offset]);
                 offset += 1;
@@ -188,9 +189,14 @@ impl Instruction {
                     offset += b;
                 }
 
+                let mut instr_type = InstructionType::Short;
+                if operands.len() == 0 {
+                    instr_type = InstructionType::ZeroOps;
+                }
+
                 (Instruction {
                     opcode: instr.opcode.value_of(),
-                    ty: InstructionType::Short,
+                    ty: instr_type,
                     ops: operands,
                 }, offset)
             },

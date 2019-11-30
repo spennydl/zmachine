@@ -9,52 +9,65 @@ bitstruct! {
     }
 }
 
-#[derive(Debug)]
-enum CharIdx {
-    Memory(usize, u8),
-    Abbreviation(usize, usize, u8)
-}
-
-pub struct ZString {
-    len_words: usize,
-    string: String
-}
-
-impl ZString {
-    pub fn new<'a>(mem: &'a [u8], abbrev_table: &'a [u8]) -> ZString {
-        let mut offset: usize = 0;
-        let string: String = ZCharIterInner::new(mem, abbrev_table, &mut offset).collect();
-        ZString { len_words: offset, string }
-    }
-
-    pub fn string(self) -> String {
-        self.string
-    }
-
-    pub fn offset(&self) -> usize {
-        self.len_words
-    }
-}
-
-pub struct ZCharIterInner<'a> {
-    offset: &'a mut usize,
+struct ZCharIter<'a> {
     mem: &'a [u8],
-    abbrev_table: &'a [u8],
-    idxs: Vec<CharIdx>
+    word_idx: Option<usize>,
+    char_idx: usize
 }
 
+impl<'a> ZCharIter<'a> {
+    pub fn new(mem: &'a [u8]) -> Self {
+        ZCharIter { mem, word_idx: Some(0), char_idx: 0 }
+    }
 
+    fn next_char(&mut self) {
+        if self.char_idx == 2 {
+            self.char_idx = 0;
+        } else {
+            self.char_idx += 1;
+        }
+    }
+}
 
-impl<'a> ZCharIterInner<'a> {
-    pub fn new(mem: &'a [u8], abbrev_table: &'a [u8], offset: &'a mut usize) -> ZCharIterInner<'a> {
-        ZCharIterInner { mem, abbrev_table, idxs: vec![CharIdx::Memory(0, 0)], offset }
+impl<'a> Iterator for ZCharIter<'a> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(word_idx) = self.word_idx.take() {
+            let word: ZWord = (self.mem[word_idx], self.mem[word_idx + 1]).into();
+            let zch = ZCharWord::new(word.into());
+
+            let idx = self.char_idx;
+            self.next_char();
+            
+            match idx {
+                0 => {
+                    self.word_idx.replace(word_idx);
+                    Some(zch.first.value_of() as u8)
+                },
+                1 => {
+                    self.word_idx.replace(word_idx);
+                    Some(zch.second.value_of() as u8)
+                },
+                2 => {
+                    if !zch.last_flag.is_set() {
+                        self.word_idx.replace(word_idx + 2);
+                    }
+                    Some(zch.third.value_of() as u8)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 }
 
 static ALPH_A0: &'static str = "abcdefghijklmnopqrstuvwxyz";
 static ALPH_A1: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-static ALPH_A2: &'static str = " ^0123456789.,!?_#'\"/\\-:()";
+static ALPH_A2: &'static str = " \n0123456789.,!?_#'\"/\\-:()";
 
+#[derive(Debug, PartialEq)]
 enum Alphabet {
     A0, A1, A2
 }
@@ -100,6 +113,133 @@ impl ZChar {
         }
     }
 }
+
+struct ZSCIIChar(Option<u8>, Option<u8>);
+
+impl ZSCIIChar {
+    fn new() -> Self {
+        ZSCIIChar(None, None)
+    }
+
+    fn push_raw_zchar(&mut self, c: u8) {
+        if self.0.is_some() {
+            self.1.replace(c);
+        } else {
+            self.0.replace(c);
+        }
+    }
+
+    fn get(&mut self) -> Option<char> {
+        if self.0.is_some() && self.1.is_some() {
+            let hi = self.0.unwrap();
+            let lo = self.1.unwrap();
+            let ch = (hi << 5) | lo;
+
+            Some(ch as char)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ZString {
+    len_words: usize,
+    string: String
+}
+
+impl ZString {
+    pub fn new<'a>(mem: &'a [u8], addr: usize, abbrev_table: &'a [u8]) -> ZString {
+        let zchars: Vec<char> = vec![];
+        let iter = ZCharIter::new(&mem[addr..]);
+
+        let chars: Vec<u8> = iter.collect();
+        println!("charsss: {:?}", chars);
+
+        let iter = ZCharIter::new(&mem[addr..]);
+
+        let (n_chars, zchars) = ZString::parse_into(iter, mem, abbrev_table, zchars);
+
+        let string: String = zchars.iter().collect();
+
+        // TODO: n_chars is a hack
+        ZString { len_words: (n_chars / 3) * 2, string }
+    }
+
+    fn parse_into<'a>(iter: ZCharIter, mem: &'a [u8], abbrev_table: &'a [u8], mut chars: Vec<char>) -> (usize, Vec<char>) {
+        let mut alph = Alphabet::A0;
+        let mut zscii: Option<ZSCIIChar> = None;
+        let mut abbrev_idx: Option<usize> = None;
+        let mut n_chars: usize = 0;
+
+        for (i, zc) in iter.enumerate() {
+            n_chars = i + 1;
+
+            if let Some(aidx) = abbrev_idx.take() {
+                let idx = (aidx + zc as usize) * 2;
+                let addr: u16 = ZWord::from((abbrev_table[idx], abbrev_table[idx + 1])).into();
+                let abbrev_iter = ZCharIter::new(&mem[addr as usize * 2..]);
+                let (_, chs) = ZString::parse_into(abbrev_iter, mem, abbrev_table, chars);
+                chars = chs;
+            } else {
+                match ZChar::new(zc) {
+                    ZChar::Shift(shift_char) => {
+                        alph = Alphabet::new(shift_char);
+                    },
+                    ZChar::Abbrev(aidx) => {
+                        abbrev_idx.replace(32 * (aidx as usize - 1));
+                    },
+                    ZChar::Char(c) => {
+                        if let Some(ref mut zsc) = zscii {
+                            zsc.push_raw_zchar(c);
+                            if let Some(c) = zsc.get() {
+                                chars.push(c);
+                                alph = Alphabet::A0;
+                                zscii.take();
+                            }
+                        } else {
+                            if c == 6 && alph == Alphabet::A2 {
+                                zscii.replace(ZSCIIChar::new());
+                            } else {
+                                let ch = alph.get(c);
+                                chars.push(ch);
+
+                                alph = Alphabet::A0;
+                            }
+                        }
+                    },
+                }
+            }
+        }
+        (n_chars, chars)
+    }
+
+    pub fn string(self) -> String {
+        self.string
+    }
+
+    pub fn offset(&self) -> usize {
+        self.len_words
+    }
+}
+
+/*
+pub struct ZCharIterInner<'a> {
+    offset: &'a mut usize,
+    mem: &'a [u8],
+    abbrev_table: &'a [u8],
+    idxs: Vec<CharIdx>
+}
+
+
+
+impl<'a> ZCharIterInner<'a> {
+    pub fn new(mem: &'a [u8], abbrev_table: &'a [u8], offset: &'a mut usize) -> ZCharIterInner<'a> {
+        ZCharIterInner { mem, abbrev_table, idxs: vec![CharIdx::Memory(0, 0)], offset }
+    }
+}
+
+
 
 impl<'a> ZCharIterInner<'a> {
     fn read_next(&mut self, mut idx: CharIdx, alphabet: Alphabet) -> Option<char> {
@@ -260,3 +400,4 @@ impl<'a> Iterator for ZCharIterInner<'a> {
         }
     }
 }
+*/

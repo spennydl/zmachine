@@ -197,9 +197,9 @@ impl ZMemory {
     }
 
     pub(crate) fn read_string(&self, addr: u16) -> (String, usize) {
-        let idx = addr as usize;
-        let zstr = ZString::new(&self.bytes[idx..], &self.bytes[self.abbrev_idx..]);
+        let zstr = ZString::new(&self.bytes[..], addr as usize, &self.bytes[self.abbrev_idx..]);
         let offset = zstr.offset();
+        println!("parsed: {:?}", zstr);
 
         (zstr.string(), offset)
     }

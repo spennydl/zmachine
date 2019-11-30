@@ -154,17 +154,8 @@ impl ZMachine {
                 }
 
             },
-            InstructionType::Short => {
+            InstructionType::ZeroOps => {
                 match instr.opcode {
-                    0 => { // jz
-                        println!("Jump zero: {:?}", instr);
-
-                        let val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
-
-                        println!("operands: {}", val);
-                        self.branch_if(&mem, &mut current_frame.pc, val == 0);
-                        return true;
-                    },
                     2 => { // PRINT!!!!
                         println!("print: {:?}", instr);
 
@@ -174,6 +165,27 @@ impl ZMachine {
                         for line in message.lines() {
                             println!("ZZZZZ  {}", line);
                         }
+                        return true;
+                    },
+                    11 => {
+                        println!("newline: {:?} pc: {:x}", instr, current_frame.pc);
+                        return false;
+                    },
+                    code => {
+                        println!("unimplemented no-op: {:?} pc: {:x}", instr, current_frame.pc);
+                        return false;
+                    }
+                }
+            },
+            InstructionType::Short => {
+                match instr.opcode {
+                    0 => { // jz
+                        println!("Jump zero: {:?}", instr);
+
+                        let val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
+
+                        println!("operands: {}", val);
+                        self.branch_if(&mem, &mut current_frame.pc, val == 0);
                         return true;
                     },
                     11 => { // return value
