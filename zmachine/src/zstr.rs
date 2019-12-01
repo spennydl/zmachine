@@ -153,11 +153,6 @@ impl ZString {
         let zchars: Vec<char> = vec![];
         let iter = ZCharIter::new(&mem[addr..]);
 
-        let chars: Vec<u8> = iter.collect();
-        //println!("charsss: {:?}", chars);
-
-        let iter = ZCharIter::new(&mem[addr..]);
-
         let (n_chars, zchars) = ZString::parse_into(iter, mem, abbrev_table, zchars);
 
         let string: String = zchars.iter().collect();

@@ -129,10 +129,6 @@ impl<'a> ZObjectProperty<'a> {
             self.data[1] = lo;
         }
     }
-
-    fn number(&self) -> u8 {
-        self.size.number.value_of() as u8
-    }
 }
 
 pub(crate) struct ZObjectProps<'a> {
@@ -325,6 +321,10 @@ impl ZMemory {
 
         self.bytes[idx] = hi;
         self.bytes[idx + 1] = lo;
+    }
+
+    pub(crate) fn set_byte(&mut self, idx: usize, val: u8) {
+        self.bytes[idx] = val;
     }
 
     pub(crate) fn slice(&self, idx: usize) -> &[u8] {

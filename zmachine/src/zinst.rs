@@ -80,6 +80,7 @@ pub(crate) enum Address {
     Local(u16),
     Global(u16),
     Word(u16),
+    Byte(u16),
 }
 
 impl Default for Address {
@@ -96,7 +97,7 @@ impl Address {
             Address::Local(addr - 1)
         } else {
             Address::Global(addr - 0x10)
-        } // there is no reason to create word addr this way
+        } // there is no reason to create word or byte addr this way
     }
 
     pub(crate) fn addr(&self) -> u16 {
@@ -105,6 +106,7 @@ impl Address {
             Address::Local(v) => *v,
             Address::Global(v) => *v,
             Address::Word(v) => *v,
+            Address::Byte(v) => *v,
         }
     }
 }

@@ -211,7 +211,7 @@ impl ZMachine {
                         let addr = self.get_value(&instr.ops[0]);
                         let idx = self.get_value(&instr.ops[1]);
                         let store = self.read_store(&mut pc);
-                        let addr = Address::Word(addr + (idx));
+                        let addr = Address::Byte(addr + idx);
 
                         let val = self.get_value(&Operand::Variable(addr));
                         let val = (val >> 8) as u8;
@@ -408,6 +408,14 @@ impl ZMachine {
 
                         self.store(val, &addr);
                     },
+                    2 => { // storeb
+                        let addr = self.get_value(&instr.ops[0]);
+                        let idx = self.get_value(&instr.ops[1]);
+                        let val = self.get_value(&instr.ops[2]);
+                        let addr = Address::Byte(addr + idx);
+
+                        self.store(val, &addr);
+                    }
                     3 => { // put prop 
                         //println!("put prop: instr {:?} pc {:x}", instr, pc);
                         let obj_num = self.get_value(&instr.ops[0]);
@@ -552,6 +560,9 @@ impl ZMachine {
             Address::Word(a) => {
                 mem.set_word(*a as usize, val.into());
             },
+            Address::Byte(a) => {
+                mem.set_byte(*a as usize, val as u8);
+            }
         }
     }
 
@@ -579,6 +590,10 @@ impl ZMachine {
                         let mem = self.memory.borrow();
                         mem.read_word(*addr as usize).into()
                     },
+                    Address::Byte(addr) => {
+                        let mem = self.memory.borrow();
+                        mem.read_byte(*addr as usize).into()
+                    }
                 }
             },
             _ => v.value(),
