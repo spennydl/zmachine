@@ -68,15 +68,19 @@ impl ZMachine {
         instr
     }
 
+    fn get_pc(&self) -> usize {
+        let stack = self.stack.borrow();
+        let idx = stack.len() - 1;
+        
+        stack[idx].pc
+    }
+
     pub fn exec_one(&self) -> bool {
         let instr = self.fetch_next_instr();
 
-        let mut stack = self.stack.borrow_mut();
+        let mut pc = self.get_pc();
         let mut mem = self.memory.borrow_mut();
-        // TODO: better stack
-        let idx = stack.len() - 1;
-        let mut current_frame = &mut stack[idx];
-        println!("PC is {:x}", current_frame.pc);
+        println!("PC is {:x}", pc);
 
         match instr.ty {
             InstructionType::Long => {
@@ -84,114 +88,110 @@ impl ZMachine {
                     1 => { // jump equal
                         println!("Jump equal: {:?}", instr);
 
-                        let lhs = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
-                        let rhs = self.get_value(&instr.ops[1], &mem, &mut current_frame) as i16;
+                        let lhs = self.get_value(&instr.ops[0], &mem) as i16;
+                        let rhs = self.get_value(&instr.ops[1], &mem) as i16;
 
                         println!("operands: {} {}", lhs, rhs);
-                        self.branch_if(&mem, &mut current_frame.pc, lhs == rhs);
-                        return true;
+                        self.branch_if(&mem, &mut pc, lhs == rhs);
                     }
                     3 => { // jump greater than
                         println!("jg: {:?}", instr);
+                        println!("unimplemented!");
                     },
                     5 => { // inc check
                         println!("inc check: {:?}", instr);
-                        let var_num = self.get_value(&instr.ops[0], &mem, &mut current_frame);
+                        let var_num = self.get_value(&instr.ops[0], &mem);
                         let var_addr = Address::of(var_num);
                         let op = Operand::Variable(var_addr);
-                        let mut var = self.get_value(&op, &mem, &mut current_frame);
-                        let val = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        let mut var = self.get_value(&op, &mem);
+                        let val = self.get_value(&instr.ops[1], &mem);
 
                         var += 1;
 
                         let addr = Address::of(var_num);
-                        self.store(var, &addr, &mut mem, &mut current_frame);
+                        self.store(var, &addr, &mut mem);
                         println!("comparing {} and {}", var, val);
-                        self.branch_if(&mem, &mut current_frame.pc, var as i16 > val as i16);
+                        self.branch_if(&mem, &mut pc, var as i16 > val as i16);
 
-                        return true;
                     },
                     10 => { // test_attr
-                        let obj_num = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let attr = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        println!("test attr {:?}", instr);
+                        let obj_num = self.get_value(&instr.ops[0], &mem);
+                        let attr = self.get_value(&instr.ops[1], &mem);
 
                         let attr = mem.test_attr(obj_num as u8, attr as u8);
-                        self.branch_if(&mem, &mut current_frame.pc, attr);
-
-                        return true;
+                        self.branch_if(&mem, &mut pc, attr);
                     },
                     13 => { // store
-                        let addr = Address::of(self.get_value(&instr.ops[0], &mem, &mut current_frame));
-                        let val = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        println!("store {:?}", instr);
+                        let addr = Address::of(self.get_value(&instr.ops[0], &mem));
+                        let val = self.get_value(&instr.ops[1], &mem);
 
-                        self.store(val, &addr, &mut mem, &mut current_frame);
-                        return true;
+                        self.store(val, &addr, &mut mem);
                     },
                     14 => { // insert_obj
                         println!("insert_obj {:?}", instr);
-                        let obj_num = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u8;
-                        let new_parent = self.get_value(&instr.ops[1], &mem, &mut current_frame) as u8;
+                        let obj_num = self.get_value(&instr.ops[0], &mem) as u8;
+                        let new_parent = self.get_value(&instr.ops[1], &mem) as u8;
 
                         mem.insert_object(obj_num, new_parent);
-                        return true;
                     }
                     15 => { // loadw
                         println!("loadw {:?}", instr);
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
-                        current_frame.pc += 1;
-                        let addr = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let idx = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        let store = Address::of(mem.read_byte(pc) as u16);
+                        pc += 1;
+                        let addr = self.get_value(&instr.ops[0], &mem);
+                        let idx = self.get_value(&instr.ops[1], &mem);
                         let addr = Address::Word(addr + (2 * idx));
 
 
                         println!("loading from {:?} to {:?}", addr, store);
-                        let val = self.get_value(&Operand::Variable(addr), &mem, &mut current_frame);
-                        self.store(val, &store, &mut mem, &mut current_frame);
-                        return true
+                        let val = self.get_value(&Operand::Variable(addr), &mem);
+                        self.store(val, &store, &mut mem);
                     },
                     16 => { // loadb
                         println!("loadb {:?}", instr);
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
-                        current_frame.pc += 1;
-                        let addr = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let idx = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        let store = Address::of(mem.read_byte(pc) as u16);
+                        pc += 1;
+                        let addr = self.get_value(&instr.ops[0], &mem);
+                        let idx = self.get_value(&instr.ops[1], &mem);
                         let addr = Address::Word(addr + (idx));
 
 
                         println!("loading byte from {:?} to {:?}", addr, store);
-                        let val = self.get_value(&Operand::Variable(addr), &mem, &mut current_frame);
+                        let val = self.get_value(&Operand::Variable(addr), &mem);
                         let val = (val >> 8) as u8;
-                        self.store(val as u16, &store, &mut mem, &mut current_frame);
-                        return true
+                        self.store(val as u16, &store, &mut mem);
                     },
                     18 => { // mod a b
                         println!("mod: {:?}", instr);
+                        println!("unimplemented!");
+                        return false;
                     },
                     20 => { // add
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        let store = Address::of(mem.read_byte(pc) as u16);
                         println!("add: {:?} {:?}", instr, store);
-                        current_frame.pc += 1;
-                        let lhs = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
-                        let rhs = self.get_value(&instr.ops[1], &mem, &mut current_frame) as i16;
+                        pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mem) as i16;
+                        let rhs = self.get_value(&instr.ops[1], &mem) as i16;
 
                         let result = lhs + rhs;
-                        self.store(result as u16, &store, &mut mem, &mut current_frame);
-
-                        return true;
+                        self.store(result as u16, &store, &mut mem);
                     },
                     21 => { // sub
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        let store = Address::of(mem.read_byte(pc) as u16);
                         println!("sub: {:?} {:?}", instr, store);
-                        current_frame.pc += 1;
-                        let lhs = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
-                        let rhs = self.get_value(&instr.ops[1], &mem, &mut current_frame) as i16;
+                        pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mem) as i16;
+                        let rhs = self.get_value(&instr.ops[1], &mem) as i16;
 
                         let result = lhs - rhs;
-                        self.store(result as u16, &store, &mut mem, &mut current_frame);
-
-                        return true;
+                        self.store(result as u16, &store, &mut mem);
                     }
-                    code => println!("Unimplemented long: {:?} pc {:x}", instr, current_frame.pc),
+                    _code => {
+                        println!("Unimplemented long: {:?} pc {:x}", instr, pc);
+                        return false;
+                    }
                 }
 
             },
@@ -199,16 +199,24 @@ impl ZMachine {
                 match instr.opcode {
                     0 => { // return true
                         println!("return true {:?}", instr);
+                        // TODO: refactor return logic into a function
+                        /*
+                        println!("return true {:?}", instr);
                         let ret_val = 1;
                         let current_frame = stack.pop().expect("blown the stack");
                         let idx = stack.len() - 1;
                         let mut next_frame = &mut stack[idx];
                         
-                        self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
+                        self.store(ret_val, &current_frame.ret_addr, &mut mem);
                         return true;
+                        */
+                        println!("unimplemented!");
+                        return false;
                     },
                     1 => { // return false
                         println!("return false {:?}", instr);
+                        // TODO: refactor return logic into a function
+                        /*
                         let ret_val = 0;
                         let current_frame = stack.pop().expect("blown the stack");
                         let idx = stack.len() - 1;
@@ -216,26 +224,27 @@ impl ZMachine {
                         
                         self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
                         return true;
+                        */
+                        println!("unimplemented!");
+                        return false;
                     },
                     2 => { // PRINT!!!!
                         println!("print: {:?}", instr);
 
-                        let (message, offset) = mem.read_string(current_frame.pc as u16);
-                        current_frame.pc += offset;
+                        let (message, offset) = mem.read_string(pc as u16);
+                        pc += offset;
 
                         for line in message.lines() {
                             println!("ZZZZZ  {}", line);
                         }
-                        return true;
                     },
                     11 => {
-                        println!("newline: {:?} pc: {:x}", instr, current_frame.pc);
+                        println!("newline: {:?} pc: {:x}", instr, pc);
                         
-                        println!();
-                        return true;
+                        println!("{}", "ZZZZZ");
                     },
-                    code => {
-                        println!("unimplemented no-op: {:?} pc: {:x}", instr, current_frame.pc);
+                    _code => {
+                        println!("unimplemented no-op: {:?} pc: {:x}", instr, pc);
                         return false;
                     }
                 }
@@ -245,42 +254,47 @@ impl ZMachine {
                     0 => { // jz
                         println!("Jump zero: {:?}", instr);
 
-                        let val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
+                        let val = self.get_value(&instr.ops[0], &mem) as i16;
 
                         println!("operands: {}", val);
-                        self.branch_if(&mem, &mut current_frame.pc, val == 0);
-                        return true;
+                        self.branch_if(&mem, &mut pc, val == 0);
                     },
                     11 => { // return value
-                        let ret_val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u16;
+                        println!("return a val {:?}", instr);
+                        /*
+                        let ret_val = self.get_value(&instr.ops[0], &mem) as u16;
                         let current_frame = stack.pop().expect("blown the stack");
                         let idx = stack.len() - 1;
                         let mut next_frame = &mut stack[idx];
                         
                         self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
                         return true;
+                        */
+                        println!("unimplemented!");
+                        return false;
                     },
                     12 => { // jump
                         println!("jump {:?}", instr);
-                        let mut jmp = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
+                        let mut jmp = self.get_value(&instr.ops[0], &mem) as i16;
                         if jmp < 0 {
                             jmp = jmp * -1;
-                            current_frame.pc = current_frame.pc - jmp as usize - 2;
+                            pc = pc - jmp as usize - 2;
                         } else {
-                            current_frame.pc = current_frame.pc + jmp as usize - 2;
+                            pc = pc + jmp as usize - 2;
                         }
-                        
-                        return true;
                     },
-                    _ => println!("Unimplemented short: {:?} pc {:x}", instr, current_frame.pc),
+                    _ => {
+                        println!("Unimplemented short: {:?} pc {:x}", instr, pc);
+                        return false;
+                    }
                 }
             },
             InstructionType::Variable => {
                 match instr.opcode {
                     0 => { // call
-                        println!("var instruction: {:x?}", instr);
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
-                        current_frame.pc += 1;
+                        println!("call: {:x?}", instr);
+                        let store = Address::of(mem.read_byte(pc) as u16);
+                        pc += 1;
 
                         let routine_addr = instr.ops[0].value() as usize * 2;
                         let mut locals: Vec<u16> = Vec::new();
@@ -294,6 +308,11 @@ impl ZMachine {
                             locals[n] = op.value();
                         }
 
+                        let mut stack = self.stack.borrow_mut();
+                        let idx = stack.len() - 1;
+                        let current_frame = &mut stack[idx];
+                        current_frame.pc = pc;
+
                         stack.push(StackFrame {
                             locals,
                             stack: Vec::new(),
@@ -301,58 +320,61 @@ impl ZMachine {
                             ret_addr: store,
                         });
 
+                        // return true here, we've already updated the pc
                         return true;
                     },
                     1 => { // storew
                         println!("storew {:?}", instr);
-                        let addr = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let idx = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        let addr = self.get_value(&instr.ops[0], &mem);
+                        let idx = self.get_value(&instr.ops[1], &mem);
                         let addr = Address::Word(addr + (2 * idx));
-                        let val = self.get_value(&instr.ops[2], &mem, &mut current_frame);
+                        let val = self.get_value(&instr.ops[2], &mem);
 
-                        println!("storing {} at {:?}", val, addr);
-                        self.store(val, &addr, &mut mem, &mut current_frame);
-                        return true
+                        self.store(val, &addr, &mut mem);
                     },
                     3 => { // put prop - objects eek!
-                        println!("put prop: instr {:?} pc {:x}", instr, current_frame.pc);
-                        let obj_num = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let prop_num = self.get_value(&instr.ops[1], &mem, &mut current_frame) as u8;
-                        let val = self.get_value(&instr.ops[2], &mem, &mut current_frame);
+                        println!("put prop: instr {:?} pc {:x}", instr, pc);
+                        let obj_num = self.get_value(&instr.ops[0], &mem);
+                        let prop_num = self.get_value(&instr.ops[1], &mem) as u8;
+                        let val = self.get_value(&instr.ops[2], &mem);
                         
                         mem.put_prop(obj_num as u8, prop_num, val.into());
-                        return true
                     },
                     5 => { // print char
-                        println!("print char: instr {:?} pc {:x}", instr, current_frame.pc);
-                        let ch = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u8;
-                        println!("{}", ch as char);
-                        return true;
+                        println!("print char: instr {:?} pc {:x}", instr, pc);
+                        let ch = self.get_value(&instr.ops[0], &mem) as u8;
+                        println!("ZZZZZ {}", ch as char);
                     },
                     6 => { // print num
                         println!("print num: {:?}", instr);
-                        let val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
-                        println!("ZZZZ: {}", val as i16);
-                        return true;
+                        let val = self.get_value(&instr.ops[0], &mem) as i16;
+                        println!("ZZZZZ {}", val as i16);
                     },
                     9 => { // AND
-                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
-                        println!("and {:?} to {:?}", instr, store);
-                        current_frame.pc += 1;
-                        let lhs = self.get_value(&instr.ops[0], &mem, &mut current_frame);
-                        let rhs = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        println!("and {:?}", instr);
+                        let store = Address::of(mem.read_byte(pc) as u16);
+                        pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mem);
+                        let rhs = self.get_value(&instr.ops[1], &mem);
 
                         let result = lhs & rhs;
 
-                        self.store(result, &store, &mut mem, &mut current_frame);
-                        return true;
+                        self.store(result, &store, &mut mem);
                     },
-                    code => println!("Unimplemented variable: instr {:?} pc {:x}", instr, current_frame.pc),
+                    _code => {
+                        println!("Unimplemented variable: instr {:?} pc {:x}", instr, pc);
+                    }
                 }
             }
         }
 
-        false
+        let mut stack = self.stack.borrow_mut();
+        let idx = stack.len() - 1;
+        let current_frame = &mut stack[idx];
+
+        current_frame.pc = pc;
+
+        true
     }
 
     fn branch_if(&self, mem: &ZMemory, pc: &mut usize, cond: bool) {
@@ -381,7 +403,10 @@ impl ZMachine {
         }
     }
 
-    fn store(&self, val: u16, addr: &Address, mem: &mut ZMemory, frame: &mut StackFrame) {
+    fn store(&self, val: u16, addr: &Address, mem: &mut ZMemory) {
+        let mut stack = self.stack.borrow_mut();
+        let idx = stack.len() - 1;
+        let frame = &mut stack[idx];
         match addr {
             Address::Global(a) => {
                 mem.set_global(*a as usize, val.into());
@@ -398,7 +423,10 @@ impl ZMachine {
         }
     }
 
-    fn get_value(&self, v: &Operand, mem: &ZMemory, frame: &mut StackFrame) -> u16 {
+    fn get_value(&self, v: &Operand, mem: &ZMemory) -> u16 {
+        let mut stack = self.stack.borrow_mut();
+        let idx = stack.len() - 1;
+        let frame = &mut stack[idx];
         match v {
             Operand::Variable(a) => {
                 match a {

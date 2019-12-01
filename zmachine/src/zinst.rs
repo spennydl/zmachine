@@ -123,7 +123,6 @@ impl Instruction {
         let mut offset = 0 as usize;
         let op = Opcode::new(mem[offset]);
         let mut operands: Vec<Operand> = vec![];
-        println!("have opcode {:?}, value_of {}", op, op.instruction_type.value_of());
 
         match op.instr_type() {
             InstructionType::Long => {
