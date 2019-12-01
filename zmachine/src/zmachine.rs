@@ -76,6 +76,7 @@ impl ZMachine {
         // TODO: better stack
         let idx = stack.len() - 1;
         let mut current_frame = &mut stack[idx];
+        println!("PC is {:x}", current_frame.pc);
 
         match instr.ty {
             InstructionType::Long => {
@@ -93,6 +94,23 @@ impl ZMachine {
                     3 => { // jump greater than
                         println!("jg: {:?}", instr);
                     },
+                    5 => { // inc check
+                        println!("inc check: {:?}", instr);
+                        let var_num = self.get_value(&instr.ops[0], &mem, &mut current_frame);
+                        let var_addr = Address::of(var_num);
+                        let op = Operand::Variable(var_addr);
+                        let mut var = self.get_value(&op, &mem, &mut current_frame);
+                        let val = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+
+                        var += 1;
+
+                        let addr = Address::of(var_num);
+                        self.store(var, &addr, &mut mem, &mut current_frame);
+                        println!("comparing {} and {}", var, val);
+                        self.branch_if(&mem, &mut current_frame.pc, var as i16 > val as i16);
+
+                        return true;
+                    },
                     10 => { // test_attr
                         let obj_num = self.get_value(&instr.ops[0], &mem, &mut current_frame);
                         let attr = self.get_value(&instr.ops[1], &mem, &mut current_frame);
@@ -109,6 +127,14 @@ impl ZMachine {
                         self.store(val, &addr, &mut mem, &mut current_frame);
                         return true;
                     },
+                    14 => { // insert_obj
+                        println!("insert_obj {:?}", instr);
+                        let obj_num = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u8;
+                        let new_parent = self.get_value(&instr.ops[1], &mem, &mut current_frame) as u8;
+
+                        mem.insert_object(obj_num, new_parent);
+                        return true;
+                    }
                     15 => { // loadw
                         println!("loadw {:?}", instr);
                         let store = Address::of(mem.read_byte(current_frame.pc) as u16);
@@ -121,6 +147,21 @@ impl ZMachine {
                         println!("loading from {:?} to {:?}", addr, store);
                         let val = self.get_value(&Operand::Variable(addr), &mem, &mut current_frame);
                         self.store(val, &store, &mut mem, &mut current_frame);
+                        return true
+                    },
+                    16 => { // loadb
+                        println!("loadb {:?}", instr);
+                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        current_frame.pc += 1;
+                        let addr = self.get_value(&instr.ops[0], &mem, &mut current_frame);
+                        let idx = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+                        let addr = Address::Word(addr + (idx));
+
+
+                        println!("loading byte from {:?} to {:?}", addr, store);
+                        let val = self.get_value(&Operand::Variable(addr), &mem, &mut current_frame);
+                        let val = (val >> 8) as u8;
+                        self.store(val as u16, &store, &mut mem, &mut current_frame);
                         return true
                     },
                     18 => { // mod a b
@@ -150,12 +191,32 @@ impl ZMachine {
 
                         return true;
                     }
-                    code => println!("Unimplemented long: raw {} pc {:x}", instr.opcode, current_frame.pc),
+                    code => println!("Unimplemented long: {:?} pc {:x}", instr, current_frame.pc),
                 }
 
             },
             InstructionType::ZeroOps => {
                 match instr.opcode {
+                    0 => { // return true
+                        println!("return true {:?}", instr);
+                        let ret_val = 1;
+                        let current_frame = stack.pop().expect("blown the stack");
+                        let idx = stack.len() - 1;
+                        let mut next_frame = &mut stack[idx];
+                        
+                        self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
+                        return true;
+                    },
+                    1 => { // return false
+                        println!("return false {:?}", instr);
+                        let ret_val = 0;
+                        let current_frame = stack.pop().expect("blown the stack");
+                        let idx = stack.len() - 1;
+                        let mut next_frame = &mut stack[idx];
+                        
+                        self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
+                        return true;
+                    },
                     2 => { // PRINT!!!!
                         println!("print: {:?}", instr);
 
@@ -169,7 +230,9 @@ impl ZMachine {
                     },
                     11 => {
                         println!("newline: {:?} pc: {:x}", instr, current_frame.pc);
-                        return false;
+                        
+                        println!();
+                        return true;
                     },
                     code => {
                         println!("unimplemented no-op: {:?} pc: {:x}", instr, current_frame.pc);
@@ -195,6 +258,18 @@ impl ZMachine {
                         let mut next_frame = &mut stack[idx];
                         
                         self.store(ret_val, &current_frame.ret_addr, &mut mem, &mut next_frame);
+                        return true;
+                    },
+                    12 => { // jump
+                        println!("jump {:?}", instr);
+                        let mut jmp = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
+                        if jmp < 0 {
+                            jmp = jmp * -1;
+                            current_frame.pc = current_frame.pc - jmp as usize - 2;
+                        } else {
+                            current_frame.pc = current_frame.pc + jmp as usize - 2;
+                        }
+                        
                         return true;
                     },
                     _ => println!("Unimplemented short: {:?} pc {:x}", instr, current_frame.pc),
@@ -247,6 +322,30 @@ impl ZMachine {
                         
                         mem.put_prop(obj_num as u8, prop_num, val.into());
                         return true
+                    },
+                    5 => { // print char
+                        println!("print char: instr {:?} pc {:x}", instr, current_frame.pc);
+                        let ch = self.get_value(&instr.ops[0], &mem, &mut current_frame) as u8;
+                        println!("{}", ch as char);
+                        return true;
+                    },
+                    6 => { // print num
+                        println!("print num: {:?}", instr);
+                        let val = self.get_value(&instr.ops[0], &mem, &mut current_frame) as i16;
+                        println!("ZZZZ: {}", val as i16);
+                        return true;
+                    },
+                    9 => { // AND
+                        let store = Address::of(mem.read_byte(current_frame.pc) as u16);
+                        println!("and {:?} to {:?}", instr, store);
+                        current_frame.pc += 1;
+                        let lhs = self.get_value(&instr.ops[0], &mem, &mut current_frame);
+                        let rhs = self.get_value(&instr.ops[1], &mem, &mut current_frame);
+
+                        let result = lhs & rhs;
+
+                        self.store(result, &store, &mut mem, &mut current_frame);
+                        return true;
                     },
                     code => println!("Unimplemented variable: instr {:?} pc {:x}", instr, current_frame.pc),
                 }

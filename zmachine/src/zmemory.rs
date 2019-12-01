@@ -31,29 +31,57 @@ impl <T: AsRef<[u8]> + AsMut<[u8]>> ZGlobals<T> {
     }
 }
 
-pub(crate) struct ZObjectEntry {
+pub(crate) struct ZObjectEntry<'a, T: 'a + AsRef<[u8]>> {
     attributes: u32,
-    parent: u8,
-    sib: u8,
-    child: u8,
-    properties: u16
+    properties: u16,
+    data: T,
+    _lifetime: std::marker::PhantomData<&'a T>
 }
 
-impl ZObjectEntry {
-    fn new(data: &[u8]) -> ZObjectEntry {
+impl<'a, T: 'a + AsRef<[u8]>> ZObjectEntry<'a, T> {
+    fn new(d: T) -> ZObjectEntry<'a, T> {
+        let data = d.as_ref();
         let attributes = (data[0] as u32) << 24 | (data[1] as u32) << 16 | (data[2] as u32) << 8 | (data[3] as u32);
-        let parent = data[4];
-        let sib = data[5];
-        let child = data[6];
         let properties: ZWord = (data[7], data[8]).into();
 
         ZObjectEntry {
             attributes,
-            parent,
-            sib,
-            child,
-            properties: properties.into()
+            properties: properties.into(),
+            data: d,
+            _lifetime: std::marker::PhantomData
         }
+    }
+
+    fn parent_num(&self) -> u8 {
+        let data = self.data.as_ref();
+        data[4]
+    }
+
+    fn child_num(&self) -> u8 {
+        let data = self.data.as_ref();
+        data[6]
+    }
+
+    fn sibling_num(&self) -> u8 {
+        let data = self.data.as_ref();
+        data[5]
+    }
+}
+
+impl<'a, T: 'a + AsRef<[u8]> + AsMut<[u8]>> ZObjectEntry<'a, T> {
+    fn set_parent(&mut self, parent_num: u8) {
+        let data = self.data.as_mut();
+        data[4] = parent_num;
+    }
+
+    fn set_child(&mut self, child_num: u8) {
+        let data = self.data.as_mut();
+        data[6] = child_num;
+    }
+
+    fn set_sibling(&mut self, sibling_num: u8) {
+        let data = self.data.as_mut();
+        data[5] = sibling_num;
     }
 }
 
@@ -121,22 +149,34 @@ impl<'a> ZObjectProps<'a> {
     }
 }
 
-pub(crate) struct ZObjectTable<T: AsRef<[u8]>> {
-    table: T
+pub(crate) struct ZObjectTable<'a, T: 'a + AsRef<[u8]>> {
+    table: T,
+    _lifetime: std::marker::PhantomData<&'a T>
 }
 
-impl<T: AsRef<[u8]>> ZObjectTable<T> {
-    fn new(table: T) -> ZObjectTable<T> {
-        ZObjectTable { table }
+impl<'a, T: 'a + AsRef<[u8]>> ZObjectTable<'a, T> {
+    fn new(table: T) -> ZObjectTable<'a, T> {
+        ZObjectTable { table, _lifetime: std::marker::PhantomData }
     }
 
-    fn get_object(&self, obj: u8) -> ZObjectEntry {
+    fn get_object(&self, obj: u8) -> ZObjectEntry<'a, &[u8]> {
         // skip the defaults table
         let table = self.table.as_ref();
         let objects = &table[62..];
         let obj_idx = obj as usize * 9; //entries are 9 bytes
 
         ZObjectEntry::new(&objects[obj_idx..obj_idx + 9])
+    }
+}
+
+impl<'a, T: 'a + AsRef<[u8]> + AsMut<[u8]>> ZObjectTable<'a, T> {
+    fn get_object_mut(&mut self, obj: u8) -> ZObjectEntry<'a, &mut [u8]> {
+        // skip the defaults table
+        let table = self.table.as_mut();
+        let objects = &mut table[62..];
+        let obj_idx = obj as usize * 9; //entries are 9 bytes
+
+        ZObjectEntry::new(&mut objects[obj_idx..obj_idx + 9])
     }
 }
 
@@ -175,13 +215,39 @@ impl ZMemory {
         println!("abbreviations table at {:x}", self.abbrev_idx);
     }
 
-    fn get_object(&self, obj_num: u8) -> ZObjectEntry {
-        ZObjectTable::new(&self.bytes[self.objects_idx..])
-            .get_object(obj_num)
+    fn set_object_parent(&mut self, obj_num: u8, new_parent: u8) {
+        ZObjectTable::new(&mut self.bytes[self.objects_idx..])
+            .get_object_mut(obj_num)
+            .set_parent(new_parent);
+    }
+
+    fn set_object_child(&mut self, obj_num: u8, new_child: u8) {
+        ZObjectTable::new(&mut self.bytes[self.objects_idx..])
+            .get_object_mut(obj_num)
+            .set_parent(new_child);
+    }
+
+    fn set_object_sibling(&mut self, obj_num: u8, new_sibling: u8) {
+        ZObjectTable::new(&mut self.bytes[self.objects_idx..])
+            .get_object_mut(obj_num)
+            .set_parent(new_sibling);
+    }
+
+    pub(crate) fn insert_object(&mut self, obj: u8, dest: u8) {
+        let prev_sibling = {
+            let table = ZObjectTable::new(&self.bytes[self.objects_idx..]);
+            let obj = table.get_object(dest);
+
+            obj.child_num()
+        };
+        self.set_object_parent(obj, dest);
+        self.set_object_sibling(obj, prev_sibling);
+        self.set_object_child(dest, obj);
     }
 
     pub(crate) fn test_attr(&self, obj_num: u8, attr: u8) -> bool {
-        let obj = self.get_object(obj_num);
+        let table = ZObjectTable::new(&self.bytes[self.objects_idx..]);
+        let obj = table.get_object(obj_num);
 
         obj.attributes & (1 << attr) > 0
     }

@@ -40,32 +40,6 @@ bitstruct! {
     }
 }
 
-/*
-fn branch_if(&self, mem: &mut ZMemory, pc: &mut u16, cond: bool) {
-    let branch_hi = mem.read_byte(*pc);
-    *pc += 1;
-
-    let inv = branch_hi & 0x80 > 0;
-    let mut offset: i32 = 0;
-    if branch_hi & 0x40 > 0 {
-        offset = (branch_hi & 0x3F) as i32;
-    } else {
-        let neg = branch_hi & 0x20 > 0;
-        let val = branch_hi & 0x1F;
-        let low = mem.read_byte(*pc);
-        *pc += 1;
-        offset = ((val as u16) << 8 | low as u16) as i32;
-        if neg {
-            offset = offset * -1;
-        }
-    }
-
-    if (cond && !inv) || (!cond && inv) {
-        *pc = ((*pc as i32) + offset as i32) as u16 - 2; // minus 2 for some reason?
-    }
-}
-*/
-
 trait InstrTypeProvider {
     fn instr_type(&self) -> InstructionType;
 }
@@ -225,9 +199,16 @@ impl Instruction {
 
                 let arg4_type = instr.arg4_type.value_of() as u8;
                 if let Some((op, b)) = Instruction::extract_operand(&arg4_type, &mem[offset..]) {
-                operands.push(op);
+                    operands.push(op);
                     offset += b;
                 }
+
+                /*
+                let mut ty = InstructionType::Variable;
+                if operands.len() == 2 {
+                    ty = InstructionType::Long;
+                }
+                */
 
                 (Instruction {
                     opcode: instr.opcode.value_of() as u8,
