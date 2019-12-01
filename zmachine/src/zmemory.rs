@@ -52,19 +52,34 @@ impl<'a, T: 'a + AsRef<[u8]>> ZObjectEntry<'a, T> {
         }
     }
 
-    fn parent_num(&self) -> u8 {
+    fn parent_num(&self) -> Option<u8> {
         let data = self.data.as_ref();
-        data[4]
+        let num = data[4];
+        if num != 0 {
+            Some(num)
+        } else {
+            None
+        }
     }
 
-    fn child_num(&self) -> u8 {
+    fn child_num(&self) -> Option<u8> {
         let data = self.data.as_ref();
-        data[6]
+        let num = data[6];
+        if num != 0 {
+            Some(num)
+        } else {
+            None
+        }
     }
 
-    fn sibling_num(&self) -> u8 {
+    fn sibling_num(&self) -> Option<u8> {
         let data = self.data.as_ref();
-        data[5]
+        let num = data[5];
+        if num != 0 {
+            Some(num)
+        } else {
+            None
+        }
     }
 }
 
@@ -224,24 +239,46 @@ impl ZMemory {
     fn set_object_child(&mut self, obj_num: u8, new_child: u8) {
         ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object_mut(obj_num)
-            .set_parent(new_child);
+            .set_child(new_child);
     }
 
     fn set_object_sibling(&mut self, obj_num: u8, new_sibling: u8) {
         ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object_mut(obj_num)
-            .set_parent(new_sibling);
+            .set_sibling(new_sibling);
+    }
+
+    pub(crate) fn get_object_parent(&self, obj_num: u8) -> u8 {
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
+            .get_object(obj_num)
+            .parent_num()
+            .expect("object with no parent?")
+    }
+
+    pub(crate) fn get_object_child(&self, obj_num: u8) -> Option<u8> {
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
+            .get_object(obj_num)
+            .child_num()
+    }
+
+    pub(crate) fn get_object_sibling(&self, obj_num: u8) -> Option<u8> {
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
+            .get_object(obj_num)
+            .sibling_num()
     }
 
     pub(crate) fn insert_object(&mut self, obj: u8, dest: u8) {
-        let prev_sibling = {
+        let prev_child = {
             let table = ZObjectTable::new(&self.bytes[self.objects_idx..]);
             let obj = table.get_object(dest);
 
             obj.child_num()
         };
         self.set_object_parent(obj, dest);
-        self.set_object_sibling(obj, prev_sibling);
+        if let Some(sib) = prev_child {
+            self.set_object_sibling(obj, sib);
+            self.set_object_sibling(sib, obj);
+        }
         self.set_object_child(dest, obj);
     }
 
@@ -265,7 +302,6 @@ impl ZMemory {
     pub(crate) fn read_string(&self, addr: u16) -> (String, usize) {
         let zstr = ZString::new(&self.bytes[..], addr as usize, &self.bytes[self.abbrev_idx..]);
         let offset = zstr.offset();
-        println!("parsed: {:?}", zstr);
 
         (zstr.string(), offset)
     }

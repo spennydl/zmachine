@@ -35,9 +35,17 @@ bitstruct! {
         invert: BranchInv, Width = U1, Offset = U15,
         offset: BranchOffset, Width = U1, Offset = U14,
         unsigned_value: BranchUnsignedValue, Width = U6, Offset = U8,
-        sign: BranchSign, Width = U1, Offset = U14,
-        signed_value: BranchSignedValue, Width = U13, Offset = U0
+        sign: BranchSign, Width = U1, Offset = U13,
+        signed_value: BranchSignedValue, Width = U14, Offset = U0
     }
+}
+
+#[derive(Debug)]
+pub enum Offset {
+    Unsigned(u8),
+    Signed(i16),
+    RTrue,
+    RFalse
 }
 
 trait InstrTypeProvider {
@@ -201,13 +209,6 @@ impl Instruction {
                     operands.push(op);
                     offset += b;
                 }
-
-                /*
-                let mut ty = InstructionType::Variable;
-                if operands.len() == 2 {
-                    ty = InstructionType::Long;
-                }
-                */
 
                 (Instruction {
                     opcode: instr.opcode.value_of() as u8,
