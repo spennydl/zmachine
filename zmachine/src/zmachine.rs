@@ -4,9 +4,11 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
 use std::cell::RefCell;
+use std::convert::TryInto;
 
 use crate::zinst::{Instruction, InstructionType, Operand, Address, BranchLabel, Offset};
 use crate::bits::ZWord;
+use crate::zstr::ZCharWord;
 
 #[derive(Debug)]
 struct BranchOffset {
@@ -41,6 +43,124 @@ pub struct StackFrame {
 pub struct ZMachine {
     memory: RefCell<ZMemory>,
     stack: RefCell<Vec<StackFrame>>,
+    input_buffer: RefCell<Option<(u16, u16)>>,
+}
+
+pub enum ZMachineExecResult {
+    NEED_INPUT,
+    NEXT,
+    EXIT
+}
+
+struct ZLexicalAnalyzer<'a> {
+    mem: &'a mut ZMemory,
+    tb_addr: u16,
+    pb_addr: u16,
+}
+
+struct ZDictEntry {
+    chars: (ZCharWord, ZCharWord)
+}
+
+impl ZDictEntry {
+
+    fn as_u32(&self) -> u32 {
+        let (ref hi, ref low) = self.chars;
+        let hi = hi.get().to_be_bytes();
+        let lo = low.get().to_be_bytes();
+        let slice = &[hi, lo].concat();
+
+        u32::from_be_bytes(slice.as_slice().try_into().unwrap())
+    }
+
+    fn from_slice(slice: &[u8]) -> ZDictEntry {
+        let mut lo = ZCharWord::new(0);
+        let mut hi = ZCharWord::new(0);
+
+        if let Some(c) = slice.get(0) {
+            hi.first.set(*c as u16);
+        } else {
+            hi.last_flag.set(1);
+            hi.first.set(5);
+        }
+        
+        if let Some(c) = slice.get(1) {
+            hi.second.set(*c as u16);
+        } else {
+            hi.last_flag.set(1);
+            hi.second.set(5);
+        }
+        
+        if let Some(c) = slice.get(2) {
+            hi.third.set(*c as u16);
+        } else {
+            hi.last_flag.set(1);
+            hi.third.set(5);
+        }
+
+        if let Some(c) = slice.get(3) {
+            lo.first.set(*c as u16);
+        } else {
+            lo.first.set(5);
+        }
+
+        if let Some(c) = slice.get(4) {
+            lo.second.set(*c as u16);
+        } else {
+            lo.second.set(5);
+        }
+
+        if let Some(c) = slice.get(5) {
+            lo.third.set(*c as u16);
+        } else {
+            lo.third.set(5);
+        }
+
+        lo.last_flag.set(1);
+
+        ZDictEntry { chars: (hi, lo) }
+    }
+}
+
+impl<'a> ZLexicalAnalyzer<'a> {
+    pub fn new(mem: &'a mut ZMemory, tb_addr: u16, pb_addr: u16) -> ZLexicalAnalyzer<'a> {
+        ZLexicalAnalyzer { mem, tb_addr, pb_addr }
+    }
+
+    fn run(&self) {
+        let text_addr = self.tb_addr as usize + 1;
+        let pb_addr = self.pb_addr as usize + 1;
+
+        let dictionary = self.mem.dictionary();
+        let separators = dictionary.separators();
+
+        let text = self.mem.slice(text_addr);
+        let mut words: Vec<&[u8]> = Vec::new();
+
+        let mut idx: usize = 0;
+        for (i, ch) in text.iter()
+            .take_while(|c| **c != 0)
+            .enumerate() {
+            if separators.contains(ch) {
+                let word = &text[idx..i];
+                let sep_word = &text[i..i + 1];
+                words.push(word);
+                words.push(sep_word);
+                idx = i + 1;
+            } else if *ch == ' ' as u8 {
+                let word = &text[idx..i]; // don't include the space
+                idx = i + 1;
+                words.push(word);
+            }
+        }
+
+        for (word, dict_entry) in words.iter().map(|w| (w, ZDictEntry::from_slice(w).as_u32())) {
+            if dictionary.contains(&dict_entry) {
+
+            }
+        }
+
+    }
 }
 
 impl ZMachine {
@@ -88,6 +208,11 @@ impl ZMachine {
         instr
     }
 
+    fn store_text_buffer(&self, tb: u16, pb: u16) {
+        let mut buffer = self.input_buffer.borrow_mut();
+        buffer.replace((tb, pb));
+    }
+
     fn get_pc(&self) -> usize {
         let stack = self.stack.borrow();
         let idx = stack.len() - 1;
@@ -103,7 +228,29 @@ impl ZMachine {
         addr
     }
 
-    pub fn exec_one(&self) -> bool {
+    pub fn send_input(&self, input: &str) {
+        println!("received {}", input);
+        if let Some((text_buffer_addr, parse_buffer_addr)) = *self.input_buffer.borrow() {
+            let mut mem = self.memory.borrow_mut();
+            mem.write_text(text_buffer_addr, &input[..]);
+            
+            let analyzer = ZLexicalAnalyzer::new(&mut mem, text_buffer_addr, parse_buffer_addr);
+            analyzer.run();
+        }
+
+        self.input_buffer.replace(None);
+    }
+
+    pub fn exec(&self) -> ZMachineExecResult {
+        loop {
+            match self.exec_one() {
+                ZMachineExecResult::NEXT => continue,
+                result => return result
+            }
+        }
+    }
+
+    fn exec_one(&self) -> ZMachineExecResult {
         let instr = self.fetch_next_instr();
 
         let mut pc = self.get_pc();
@@ -246,7 +393,7 @@ impl ZMachine {
                     }
                     _code => {
                         println!("Unimplemented long: {:?} pc {:x}", instr, pc);
-                        return false;
+                        return ZMachineExecResult::EXIT;
                     }
                 }
 
@@ -282,7 +429,7 @@ impl ZMachine {
                     },
                     _code => {
                         println!("unimplemented no-op: {:?} pc: {:x}", instr, pc);
-                        return false;
+                        return ZMachineExecResult::NEXT;
                     }
                 }
             },
@@ -361,7 +508,7 @@ impl ZMachine {
                     },
                     _ => {
                         println!("Unimplemented short: {:?} pc {:x}", instr, pc);
-                        return false;
+                        return ZMachineExecResult::EXIT;
                     }
                 }
             },
@@ -397,7 +544,7 @@ impl ZMachine {
                         });
 
                         // return true here, we've already updated the pc
-                        return true;
+                        return ZMachineExecResult::NEXT;
                     },
                     1 => { // storew
                         //println!("storew {:?}", instr);
@@ -424,6 +571,14 @@ impl ZMachine {
                         
                         let mut mem = self.memory.borrow_mut();
                         mem.put_prop(obj_num as u8, prop_num, val.into());
+                    },
+                    4 => { // read!
+                        let text_buffer_addr = self.get_value(&instr.ops[0]);
+                        let parse_buffer_addr = self.get_value(&instr.ops[1]);
+
+                        self.store_text_buffer(text_buffer_addr, parse_buffer_addr);
+
+                        return ZMachineExecResult::NEED_INPUT;
                     },
                     5 => { // print char
                         //println!("print char: instr {:?} pc {:x}", instr, pc);
@@ -454,7 +609,7 @@ impl ZMachine {
                     },
                     _code => {
                         println!("Unimplemented variable: instr {:?} pc {:x}", instr, pc);
-                        return false;
+                        return ZMachineExecResult::EXIT;
                     }
                 }
             }
@@ -466,7 +621,7 @@ impl ZMachine {
 
         current_frame.pc = pc;
 
-        true
+        ZMachineExecResult::NEXT
     }
 
     fn read_offset(&self, pc: &mut usize) -> BranchOffset {

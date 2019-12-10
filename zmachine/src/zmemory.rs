@@ -2,6 +2,7 @@ use crate::bits::ZWord;
 use crate::zstr::ZString;
 use typenum::{U0, U3, U5};
 use std::convert::AsRef;
+use std::convert::TryInto;
 
 pub struct ZGlobals<T: AsRef<[u8]>> {
     table: T
@@ -41,12 +42,12 @@ pub(crate) struct ZObjectEntry<'a, T: 'a + AsRef<[u8]>> {
 impl<'a, T: 'a + AsRef<[u8]>> ZObjectEntry<'a, T> {
     fn new(d: T) -> ZObjectEntry<'a, T> {
         let data = d.as_ref();
-        let attributes = (data[0] as u32) << 24 | (data[1] as u32) << 16 | (data[2] as u32) << 8 | (data[3] as u32);
-        let properties: ZWord = (data[7], data[8]).into();
+        let attributes = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let properties: u16 = u16::from_be_bytes([data[7], data[8]]);
 
         ZObjectEntry {
             attributes,
-            properties: properties.into(),
+            properties: properties,
             data: d,
             _lifetime: std::marker::PhantomData
         }
@@ -191,12 +192,48 @@ impl<'a, T: 'a + AsRef<[u8]> + AsMut<[u8]>> ZObjectTable<'a, T> {
     }
 }
 
+pub(crate) struct ZDictionary {
+    entries: Vec<u32>,
+    separators: Vec<u8>,
+}
+
+impl ZDictionary {
+    pub fn new(mem: &[u8]) -> ZDictionary {
+        let sep_len = mem[0];
+
+        let separators: Vec<u8> = (0..sep_len)
+            .map(|i| { mem[i as usize + 1] })
+            .collect();
+
+        let mut idx = sep_len as usize + 1;
+        let entry_len = mem[idx]; idx += 1;
+        let n_entries = u16::from_be_bytes([mem[idx], mem[idx + 1]]) as usize;
+        idx += 2;
+
+        let entries: Vec<u32> = (0..n_entries)
+            .step_by(entry_len as usize)
+            .map(|i| { u32::from_be_bytes(mem[idx + i..idx + i + 4].try_into().unwrap()) })
+            .collect();
+        
+        ZDictionary { separators, entries }
+    }
+
+    pub fn separators(&self) -> &Vec<u8> {
+        &self.separators
+    }
+
+    pub fn contains(&self, word: &u32) -> bool {
+        self.entries.contains(&word)
+    }
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct ZMemory {
     bytes: Vec<u8>,
     globals_idx: usize,
     objects_idx: usize,
-    abbrev_idx: usize
+    abbrev_idx: usize,
+    dictionary_idx: usize
 }
 
 impl ZMemory {
@@ -224,6 +261,14 @@ impl ZMemory {
         let abbrev_idx = self.read_word(0x18);
         self.abbrev_idx = u16::from(abbrev_idx) as usize;
         println!("abbreviations table at {:x}", self.abbrev_idx);
+
+        let abbrev_idx = self.read_word(0x18);
+        self.abbrev_idx = u16::from(abbrev_idx) as usize;
+        println!("abbreviations table at {:x}", self.abbrev_idx);
+
+        let dictionary_idx = self.read_word(0x08);
+        self.dictionary_idx = u16::from(dictionary_idx) as usize;
+        println!("dictionary table at {:x}", self.dictionary_idx);
     }
 
     fn set_object_parent(&mut self, obj_num: u8, new_parent: u8) {
@@ -282,7 +327,7 @@ impl ZMemory {
         let table = ZObjectTable::new(&self.bytes[self.objects_idx..]);
         let obj = table.get_object(obj_num);
 
-        obj.attributes & (1 << attr) > 0
+        obj.attributes & (1 << attr as u32) > 0
     }
 
     pub(crate) fn put_prop(&mut self, obj_num: u8, prop_num: u8, val: ZWord) {
@@ -300,6 +345,21 @@ impl ZMemory {
         let offset = zstr.offset();
 
         (zstr.string(), offset)
+    }
+
+    pub(crate) fn write_text(&mut self, addr: u16, text: &str) {
+        let start_addr = addr as usize + 1;
+        let mut end: usize = 0;
+        for (i, c) in text.chars().enumerate() {
+            self.set_byte(start_addr + i, c as u8);
+            end = i;
+        }
+        self.set_byte(start_addr + end, 0);
+    }
+
+    pub(crate) fn dictionary(&self) -> ZDictionary {
+        let dict = &self.bytes[self.dictionary_idx..];
+        ZDictionary::new(dict)
     }
 
     pub(crate) fn header(&self) -> &[u8] {
@@ -330,6 +390,5 @@ impl ZMemory {
     pub(crate) fn slice(&self, idx: usize) -> &[u8] {
         &self.bytes[idx..]
     }
-
 }
 

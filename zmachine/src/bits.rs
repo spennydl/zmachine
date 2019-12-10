@@ -6,14 +6,15 @@ pub struct ZWord(u16);
 
 impl From<ZWord> for (u8, u8) {
     fn from(v: ZWord) -> (u8, u8) {
-        ((v.0 >> 8) as u8, (v.0 | 0x00ff) as u8)
+        let [ hi, lo ] = v.0.to_be_bytes();
+        (hi, lo)
     }
 }
 
 impl From<(u8, u8)> for ZWord {
     fn from(v: (u8, u8)) -> ZWord {
         let (hi, lo) = v;
-        ZWord((hi as u16) << 8 | lo as u16)
+        ZWord(u16::from_be_bytes([hi, lo]))
     }
 }
 
@@ -59,14 +60,20 @@ macro_rules! bitstruct {
 
             #[derive(Debug)]
             pub struct $name {
+                val: $numtype,
                 $(pub $field: $type),+
             }
 
             impl $name {
                 pub fn new(val: $numtype) -> $name {
                     $name {
+                        val,
                         $($field: $type::new(val)),+
                     }
+                }
+
+                pub fn get(&self) -> $numtype {
+                    self.val
                 }
             }
         )+
@@ -83,7 +90,7 @@ pub struct BitField<N, W: Unsigned, O: Unsigned, M: Unsigned> {
 
 impl<N, W: Unsigned, O: Unsigned, M: Unsigned> BitField<N, W, O, M> 
 where
-    N: std::ops::BitAnd<Output = N> + std::ops::Shr<Output = N> + PartialOrd + PartialEq + Eq + Copy,
+    N: std::ops::BitOr<Output = N> + std::ops::Not<Output = N> + std::ops::BitAnd<Output = N> + std::ops::Shr<Output = N> + std::ops::Shl<Output = N> + PartialOrd + PartialEq + Eq + Copy,
     W: To<N>,
     O: To<N>,
     M: To<N> {
@@ -102,5 +109,10 @@ where
 
     pub fn value_of(&self) -> N {
         (self.val & M::to()) >> O::to()
+    }
+
+    pub fn set(&mut self, val: N) {
+        let val = (val << O::to()) & M::to();
+        self.val = self.val & !M::to() | val;
     }
 }

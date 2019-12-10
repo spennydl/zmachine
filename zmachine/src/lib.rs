@@ -12,7 +12,7 @@ mod constants;
 #[macro_use]
 extern crate typenum;
 
-pub use zmachine::{ZMachine};
+pub use zmachine::{ZMachine, ZMachineExecResult};
 
 #[cfg(test)]
 mod tests {
