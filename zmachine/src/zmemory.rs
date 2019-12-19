@@ -459,7 +459,6 @@ impl ZMemory {
     }
 
     pub(crate) fn remove_obj(&mut self, obj: u8) {
-        println!("removing object {}", obj);
         let parent = self.get_object_parent(obj);
         self.set_object_parent(obj, 0);
 
@@ -478,6 +477,7 @@ impl ZMemory {
                     if sib == obj {
                         let new_sib = self.get_object_sibling(sib).unwrap_or(0);
                         self.set_object_sibling(current, new_sib);
+                        self.set_object_sibling(obj, 0);
                         current = new_sib;
                     } else {
                         current = sib;

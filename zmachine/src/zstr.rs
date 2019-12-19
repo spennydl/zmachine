@@ -182,15 +182,10 @@ impl ZSCIIChar {
     }
 
     fn get(&mut self) -> Option<char> {
-        if self.0.is_some() && self.1.is_some() {
-            let hi = self.0.unwrap();
-            let lo = self.1.unwrap();
-            let ch = (hi << 5) | lo;
-
-            Some(ch as char)
-        } else {
-            None
-        }
+        self.0.iter()
+            .zip(self.1.iter())
+            .map(|(hi, lo)| ((hi << 5) | lo) as char)
+            .next()
     }
 }
 

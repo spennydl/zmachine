@@ -10,6 +10,56 @@ use crate::zinst::{Instruction, InstructionType, Operand, Address, BranchLabel, 
 use crate::bits::ZWord;
 use crate::zstr::{ZCharWord, ZChar};
 
+use std::time::SystemTime;
+use rand::{rngs::{StdRng}, Rng, SeedableRng, distributions::{Uniform}};
+
+#[derive(Debug)]
+struct ZRng<T: SeedableRng + Rng> {
+    seed: u64,
+    runs: usize,
+    rng: T
+}
+
+impl<T: SeedableRng + Rng> Default for ZRng<T> {
+    fn default() -> Self {
+        ZRng::new()
+    }
+}
+
+impl<T> ZRng<T>
+    where T: SeedableRng + Rng {
+    fn new() -> Self {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("can get system time");
+        let seed = now.as_millis() as u64;
+
+        let rng = T::seed_from_u64(seed);
+
+        ZRng { seed, runs: 0, rng }
+    }
+
+    fn seed_with(&mut self, val: u64) {
+        self.rng = T::seed_from_u64(val);
+        self.seed = val;
+        self.runs = 0;
+    }
+
+    fn seed(&mut self) {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("can get system time");
+        let seed = now.as_millis() as u64;
+
+        self.rng = T::seed_from_u64(seed);
+        self.seed = seed;
+        self.runs = 0;
+    }
+
+    fn range(&mut self, range: std::ops::Range<u16>) -> u16 {
+        let dist = Uniform::from(range);
+        self.rng.sample(dist)
+    }
+}
+
+type ZStdRng = ZRng<StdRng>;
+
 #[derive(Debug)]
 struct BranchOffset {
     target: bool,
@@ -44,6 +94,7 @@ pub struct ZMachine {
     memory: RefCell<ZMemory>,
     stack: RefCell<Vec<StackFrame>>,
     input_buffer: RefCell<Option<(u16, u16)>>,
+    rng: RefCell<ZStdRng>,
 }
 
 pub enum ZMachineExecResult {
@@ -206,8 +257,6 @@ impl ZLexicalAnalyzer {
         mem.set_byte(self.pb_addr as usize + 1, words.len() as u8);
         let idx = self.pb_addr as usize + 2;
         for (i, word) in (0..words.len() * 4).step_by(4).zip(words.iter()) {
-            println!("writing word {:?}", word);
-            println!("i is {}", i);
             mem.set_word(idx + i, word.dict_addr.into());
             mem.set_byte(idx + i + 2, word.len);
             mem.set_byte(idx + i + 3, word.tb_idx + 1); // skip the size byte
@@ -474,7 +523,7 @@ impl ZMachine {
                         self.store(val, &addr);
                     },
                     14 => { // insert_obj
-                        println!("INSERT_OBJ {:?}", instr);
+                        //println!("INSERT_OBJ {:?}", instr);
                         let obj_num = self.get_value(&instr.ops[0]) as u8;
                         let new_parent = self.get_value(&instr.ops[1]) as u8;
 
@@ -759,7 +808,7 @@ impl ZMachine {
                         print!("{}", message);
                     },
                     9 => { // remove obj
-                        println!("remove obj {:?}", instr);
+                        //println!("remove obj {:?}", instr);
                         let obj_num = self.get_value(&instr.ops[0]);
                         let mut mem = self.memory.borrow_mut();
                         mem.remove_obj(obj_num as u8);
@@ -901,6 +950,24 @@ impl ZMachine {
                         //println!("print num: {:?}", instr);
                         let val = self.get_value(&instr.ops[0]) as i16;
                         print!("{}", val as i16);
+                    },
+                    7 => { //random
+                        //println!("random: {:?}", instr);
+                        let val = self.get_value(&instr.ops[0]) as i16;
+
+                        let mut rng = self.rng.borrow_mut();
+                        let result = if val == 0 {
+                            rng.seed();
+                            0
+                        } else if val < 0 {
+                            rng.seed_with(val as u64);
+                            0
+                        } else {
+                            rng.range(1..val as u16)
+                        };
+
+                        let store = self.read_store(&mut pc);
+                        self.store(result, &store);
                     },
                     8 => { //push
                         //println!("push {:?}", instr);

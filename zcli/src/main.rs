@@ -3,7 +3,7 @@ use std::io;
 
 fn main() {
     let mut machine = ZMachine::new();
-    match machine.load("./games/zork1-r119-s880429.z3") {
+    match machine.load("./games/hitchhiker-r60-s861002.z3") {
         Ok(()) => {
             loop {
                 match machine.exec() {
