@@ -8,7 +8,7 @@ use std::convert::TryInto;
 
 use crate::zinst::{Instruction, InstructionType, Operand, Address, BranchLabel, Offset};
 use crate::bits::ZWord;
-use crate::zstr::ZCharWord;
+use crate::zstr::{ZCharWord, ZChar};
 
 #[derive(Debug)]
 struct BranchOffset {
@@ -52,12 +52,12 @@ pub enum ZMachineExecResult {
     EXIT
 }
 
-struct ZLexicalAnalyzer<'a> {
-    mem: &'a mut ZMemory,
+struct ZLexicalAnalyzer {
     tb_addr: u16,
     pb_addr: u16,
 }
 
+#[derive(Debug)]
 struct ZDictEntry {
     chars: (ZCharWord, ZCharWord)
 }
@@ -77,90 +77,143 @@ impl ZDictEntry {
         let mut lo = ZCharWord::new(0);
         let mut hi = ZCharWord::new(0);
 
-        if let Some(c) = slice.get(0) {
-            hi.first.set(*c as u16);
+        let mut chars: Vec<ZChar> = Vec::new();
+        for c in slice.iter().take(6) {
+            chars.extend(ZChar::encode(c.to_ascii_lowercase()));
+        }
+
+        if let Some(c) = chars.get(0) {
+            hi.first.set(*c.value() as u16);
         } else {
-            hi.last_flag.set(1);
             hi.first.set(5);
         }
-        
-        if let Some(c) = slice.get(1) {
-            hi.second.set(*c as u16);
+
+        if let Some(c) = chars.get(1) {
+            hi.second.set(*c.value() as u16);
         } else {
-            hi.last_flag.set(1);
             hi.second.set(5);
         }
-        
-        if let Some(c) = slice.get(2) {
-            hi.third.set(*c as u16);
+
+        if let Some(c) = chars.get(2) {
+            hi.third.set(*c.value() as u16);
         } else {
-            hi.last_flag.set(1);
             hi.third.set(5);
         }
 
-        if let Some(c) = slice.get(3) {
-            lo.first.set(*c as u16);
+        if let Some(c) = chars.get(3) {
+            lo.first.set(*c.value() as u16);
         } else {
             lo.first.set(5);
         }
 
-        if let Some(c) = slice.get(4) {
-            lo.second.set(*c as u16);
+        if let Some(c) = chars.get(4) {
+            lo.second.set(*c.value() as u16);
         } else {
             lo.second.set(5);
         }
 
-        if let Some(c) = slice.get(5) {
-            lo.third.set(*c as u16);
+        if let Some(c) = chars.get(5) {
+            lo.third.set(*c.value() as u16);
         } else {
             lo.third.set(5);
         }
 
         lo.last_flag.set(1);
 
-        ZDictEntry { chars: (hi, lo) }
+        let ret = ZDictEntry { chars: (hi, lo) };
+
+        ret
     }
 }
 
-impl<'a> ZLexicalAnalyzer<'a> {
-    pub fn new(mem: &'a mut ZMemory, tb_addr: u16, pb_addr: u16) -> ZLexicalAnalyzer<'a> {
-        ZLexicalAnalyzer { mem, tb_addr, pb_addr }
+#[derive(Debug)]
+struct ZLexWord {
+    pub dict_addr: u16,
+    pub len: u8,
+    pub tb_idx: u8
+}
+
+impl<'a> ZLexWord {
+    pub fn new(dict_addr: u16, len: u8, tb_idx: u8) -> ZLexWord {
+        let ret = ZLexWord { dict_addr, len, tb_idx };
+        ret
+    }
+}
+
+impl ZLexicalAnalyzer {
+    pub fn new(tb_addr: u16, pb_addr: u16) -> ZLexicalAnalyzer {
+        ZLexicalAnalyzer { tb_addr, pb_addr }
     }
 
-    fn run(&self) {
-        let text_addr = self.tb_addr as usize + 1;
-        let pb_addr = self.pb_addr as usize + 1;
-
-        let dictionary = self.mem.dictionary();
+    fn run(&self, mem: &mut ZMemory) {
+        let dictionary = mem.dictionary();
         let separators = dictionary.separators();
 
-        let text = self.mem.slice(text_addr);
-        let mut words: Vec<&[u8]> = Vec::new();
+        let text = mem.slice(self.tb_addr as usize + 1);
+        let mut words: Vec<ZLexWord> = Vec::new();
 
-        let mut idx: usize = 0;
+        let max_words = mem.read_byte(self.pb_addr as usize);
+        let mut idx = 0usize;
         for (i, ch) in text.iter()
-            .take_while(|c| **c != 0)
             .enumerate() {
+
+            if i >= max_words as usize {
+                break;
+            }
+
             if separators.contains(ch) {
                 let word = &text[idx..i];
+
+                let dict_entry = ZDictEntry::from_slice(word).as_u32();
+                let mut dict_addr = 0;
+                if let Some(addr) = dictionary.lookup(&dict_entry) {
+                    dict_addr = addr;
+                }
+                words.push(ZLexWord::new(dict_addr as u16, word.len() as u8, idx as u8));
+
                 let sep_word = &text[i..i + 1];
-                words.push(word);
-                words.push(sep_word);
+                let dict_entry = ZDictEntry::from_slice(sep_word).as_u32();
+                let mut dict_addr = 0;
+                if let Some(addr) = dictionary.lookup(&dict_entry) {
+                    dict_addr = addr;
+                }
+                words.push(ZLexWord::new(dict_addr as u16, sep_word.len() as u8, i as u8));
+
                 idx = i + 1;
+
             } else if *ch == ' ' as u8 {
                 let word = &text[idx..i]; // don't include the space
+                let dict_entry = ZDictEntry::from_slice(word).as_u32();
+                let mut dict_addr = 0;
+                if let Some(addr) = dictionary.lookup(&dict_entry) {
+                    dict_addr = addr;
+                }
+                words.push(ZLexWord::new(dict_addr as u16, word.len() as u8, idx as u8));
                 idx = i + 1;
-                words.push(word);
+            } else if *ch == 0 || *ch == '\n' as u8 {
+                let word = &text[idx..i];
+                let dict_entry = ZDictEntry::from_slice(word).as_u32();
+                let mut dict_addr = 0;
+                if let Some(addr) = dictionary.lookup(&dict_entry) {
+                    dict_addr = addr;
+                }
+                words.push(ZLexWord::new(dict_addr as u16, word.len() as u8, idx as u8));
+
+                break;
             }
         }
 
-        for (word, dict_entry) in words.iter().map(|w| (w, ZDictEntry::from_slice(w).as_u32())) {
-            if dictionary.contains(&dict_entry) {
-
-            }
+        mem.set_byte(self.pb_addr as usize + 1, words.len() as u8);
+        let idx = self.pb_addr as usize + 2;
+        for (i, word) in (0..words.len() * 4).step_by(4).zip(words.iter()) {
+            println!("writing word {:?}", word);
+            println!("i is {}", i);
+            mem.set_word(idx + i, word.dict_addr.into());
+            mem.set_byte(idx + i + 2, word.len);
+            mem.set_byte(idx + i + 3, word.tb_idx + 1); // skip the size byte
         }
-
     }
+
 }
 
 impl ZMachine {
@@ -216,7 +269,7 @@ impl ZMachine {
     fn get_pc(&self) -> usize {
         let stack = self.stack.borrow();
         let idx = stack.len() - 1;
-        
+
         stack[idx].pc
     }
 
@@ -229,13 +282,13 @@ impl ZMachine {
     }
 
     pub fn send_input(&self, input: &str) {
-        println!("received {}", input);
+        //println!("received {}", input);
         if let Some((text_buffer_addr, parse_buffer_addr)) = *self.input_buffer.borrow() {
             let mut mem = self.memory.borrow_mut();
             mem.write_text(text_buffer_addr, &input[..]);
-            
-            let analyzer = ZLexicalAnalyzer::new(&mut mem, text_buffer_addr, parse_buffer_addr);
-            analyzer.run();
+
+            let analyzer = ZLexicalAnalyzer::new(text_buffer_addr, parse_buffer_addr);
+            analyzer.run(&mut mem);
         }
 
         self.input_buffer.replace(None);
@@ -251,34 +304,66 @@ impl ZMachine {
     }
 
     fn exec_one(&self) -> ZMachineExecResult {
+        /*{
+            let pc = self.get_pc();
+            println!("PC is {:x}", pc);
+        }*/
         let instr = self.fetch_next_instr();
 
         let mut pc = self.get_pc();
-        //println!("PC is {:x}", pc);
 
         match instr.ty {
             InstructionType::Long => {
                 match instr.opcode {
                     1 => { // jump equal
-                        //println!("Jump equal: {:?}", instr);
-
+                        //println!("je: {:?}", instr);
+                        let test = self.get_value(&instr.ops[0]) as i16;
+                        let offset = self.read_offset(&mut pc);
+                        let matches = instr.ops[1..].iter().any(|op| self.get_value(op) as i16 == test);
+                        if matches == *offset.target() {
+                            self.branch(offset, &mut pc);
+                        }
+                    }
+                    2 => { // jump less than
+                        //println!("jl: {:?}", instr);
                         let lhs = self.get_value(&instr.ops[0]) as i16;
                         let rhs = self.get_value(&instr.ops[1]) as i16;
-                        let cond = lhs == rhs;
+                        let cond = lhs < rhs;
 
                         let offset = self.read_offset(&mut pc);
                         if cond == *offset.target() {
                             self.branch(offset, &mut pc);
                         }
-                    }
+                    },
                     3 => { // jump greater than
-                        //println!("je: {:?}", instr);
+                        //println!("jg: {:?}", instr);
                         let lhs = self.get_value(&instr.ops[0]) as i16;
                         let rhs = self.get_value(&instr.ops[1]) as i16;
                         let cond = lhs > rhs;
 
                         let offset = self.read_offset(&mut pc);
                         if cond == *offset.target() {
+                            self.branch(offset, &mut pc);
+                        }
+                    },
+                    4 => { // dec check
+                        //println!("dec check: {:?}", instr);
+
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let var_addr = Address::of(var_num);
+                        let op = Operand::Variable(var_addr);
+
+                        let var = self.get_value(&op) as i16;
+                        let val = self.get_value(&instr.ops[1]) as i16;
+
+                        let var = var.wrapping_sub(1);
+                        let cond = var < val;
+
+                        let addr = Address::of(var_num);
+                        self.store(var as u16, &addr);
+
+                        let offset = self.read_offset(&mut pc);
+                        if cond == offset.target {
                             self.branch(offset, &mut pc);
                         }
                     },
@@ -289,10 +374,10 @@ impl ZMachine {
                         let var_addr = Address::of(var_num);
                         let op = Operand::Variable(var_addr);
 
-                        let mut var = self.get_value(&op) as i16;
+                        let var = self.get_value(&op) as i16;
                         let val = self.get_value(&instr.ops[1]) as i16;
 
-                        var += 1;
+                        let var = var.wrapping_add(1);
                         let cond = var > val;
 
                         let addr = Address::of(var_num);
@@ -303,10 +388,25 @@ impl ZMachine {
                             self.branch(offset, &mut pc);
                         }
                     },
+                    6 => { //jump in
+                        //println!("jin {:?}", instr);
+                        let test_obj = self.get_value(&instr.ops[0]) as u8;
+                        let test_parent = self.get_value(&instr.ops[1]) as u8;
+                        let parent = {
+                            let mem = self.memory.borrow();
+                            mem.get_object_parent(test_obj)
+                        };
+                        let cond = parent == test_parent;
+
+                        let offset = self.read_offset(&mut pc);
+                        if cond == offset.target {
+                            self.branch(offset, &mut pc);
+                        }
+                    }
                     7 => { // test
                         //println!("test {:?}", instr);
                         let bm = self.get_value(&instr.ops[0]);
-                        let flags = self.get_value(&instr.ops[0]);
+                        let flags = self.get_value(&instr.ops[1]);
                         let cond = bm & flags == flags;
 
                         let offset = self.read_offset(&mut pc);
@@ -314,28 +414,67 @@ impl ZMachine {
                             self.branch(offset, &mut pc);
                         }
                     },
+                    8 => { // or
+                        //println!("or {:?}", instr);
+                        let store = self.read_store(&mut pc);
+                        let lhs = self.get_value(&instr.ops[0]);
+                        let rhs = self.get_value(&instr.ops[1]);
+
+                        let result = lhs | rhs;
+
+                        self.store(result, &store);
+                    },
+                    9 => { // AND
+                        //println!("and {:?}", instr);
+                        let store = self.read_store(&mut pc);
+                        let lhs = self.get_value(&instr.ops[0]);
+                        let rhs = self.get_value(&instr.ops[1]);
+
+                        let result = lhs & rhs;
+
+                        self.store(result, &store);
+                    },
                     10 => { // test_attr
                         //println!("test attr {:?}", instr);
                         let obj_num = self.get_value(&instr.ops[0]);
                         let attr = self.get_value(&instr.ops[1]);
                         let offset = self.read_offset(&mut pc);
 
-                        let mem = self.memory.borrow();
-                        let attr = mem.test_attr(obj_num as u8, attr as u8);
+                        let attr = {
+                            let mem = self.memory.borrow();
+                            mem.test_attr(obj_num as u8, attr as u8)
+                        };
 
                         if attr == offset.target {
                             self.branch(offset, &mut pc);
                         }
                     },
+                    11 => {
+                        //println!("set attr {:?} pc {:x}", instr, pc);
+                        let obj_num = self.get_value(&instr.ops[0]) as u8;
+                        let attr = self.get_value(&instr.ops[1]) as u8;
+                        let mut mem = self.memory.borrow_mut();
+                        mem.set_attr(obj_num, attr);
+                    },
+                    12 => {
+                        //println!("clear attr {:?} pc {:x}", instr, pc);
+                        let obj_num = self.get_value(&instr.ops[0]) as u8;
+                        let attr = self.get_value(&instr.ops[1]) as u8;
+                        let mut mem = self.memory.borrow_mut();
+                        mem.clear_attr(obj_num, attr);
+                    },
                     13 => { // store
                         //println!("store {:?}", instr);
-                        let addr = Address::of(instr.ops[0].value());
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let addr = Address::of(var_num);
+                        let op = Operand::Variable(Address::of(var_num));
                         let val = self.get_value(&instr.ops[1]);
 
+                        let _ = self.get_value(&op);
                         self.store(val, &addr);
                     },
                     14 => { // insert_obj
-                        //println!("insert_obj {:?}", instr);
+                        println!("INSERT_OBJ {:?}", instr);
                         let obj_num = self.get_value(&instr.ops[0]) as u8;
                         let new_parent = self.get_value(&instr.ops[1]) as u8;
 
@@ -361,17 +500,43 @@ impl ZMachine {
                         let addr = Address::Byte(addr + idx);
 
                         let val = self.get_value(&Operand::Variable(addr));
-                        let val = (val >> 8) as u8;
-                        self.store(val as u16, &store);
+                        self.store(val, &store);
                     },
-                    18 => { // mod a b
-                        //println!("mod: {:?}", instr);
-                        let lhs = self.get_value(&instr.ops[0]) as i16;
-                        let rhs = self.get_value(&instr.ops[1]) as i16;
-                        let store = self.read_store(&mut pc);
+                    17 => { //get prop
+                        //println!("get prop {:?} pc {:x}", instr, pc);
+                        let obj = self.get_value(&instr.ops[0]) as u8;
+                        let property = self.get_value(&instr.ops[1]) as u8;
+                        let prop = {
+                            let mem = self.memory.borrow();
+                            mem.get_prop(obj, property)
+                        };
 
-                        let result = lhs % rhs;
-                        self.store(result as u16, &store);
+                        let p: u16 = prop.into();
+                        let store = self.read_store(&mut pc);
+                        self.store(p, &store);
+                    },
+                    18 => { //get prop addr
+                        //println!("get prop addr {:?}", instr);
+                        let obj = self.get_value(&instr.ops[0]) as u8;
+                        let prop_num = self.get_value(&instr.ops[1]) as u8;
+                        let addr = {
+                            let mem = self.memory.borrow();
+                            mem.get_prop_addr(obj, prop_num)
+                        };
+
+                        let store = self.read_store(&mut pc);
+                        self.store(addr, &store);
+                    },
+                    19 => { // get next prop
+                        let obj = self.get_value(&instr.ops[0]) as u8;
+                        let prop_num = self.get_value(&instr.ops[1]) as u8;
+                        let next_prop = {
+                            let mem = self.memory.borrow();
+                            mem.get_next_prop(obj, prop_num)
+                        };
+
+                        let store = self.read_store(&mut pc);
+                        self.store(next_prop as u16, &store);
                     },
                     20 => { // add
                         let lhs = self.get_value(&instr.ops[0]) as i16;
@@ -379,7 +544,7 @@ impl ZMachine {
                         let store = self.read_store(&mut pc);
                         //println!("add: {:?}", instr);
 
-                        let result = lhs + rhs;
+                        let result = lhs.wrapping_add(rhs);
                         self.store(result as u16, &store);
                     },
                     21 => { // sub
@@ -388,9 +553,36 @@ impl ZMachine {
                         let store = self.read_store(&mut pc);
                         //println!("sub: {:?}", instr);
 
-                        let result = lhs - rhs;
+                        let result = lhs.wrapping_sub(rhs);
                         self.store(result as u16, &store);
-                    }
+                    },
+                    22 => { // mul
+                        let lhs = self.get_value(&instr.ops[0]) as i16;
+                        let rhs = self.get_value(&instr.ops[1]) as i16;
+                        let store = self.read_store(&mut pc);
+                        //println!("mul: {:?}", instr);
+
+                        let result = lhs.wrapping_mul(rhs);
+                        self.store(result as u16, &store);
+                    },
+                    23 => { // div
+                        let lhs = self.get_value(&instr.ops[0]) as i16;
+                        let rhs = self.get_value(&instr.ops[1]) as i16;
+                        let store = self.read_store(&mut pc);
+                        //println!("sub: {:?}", instr);
+
+                        let result = lhs / rhs;
+                        self.store(result as u16, &store);
+                    },
+                    24 => { // mod a b
+                        //println!("mod: {:?}", instr);
+                        let lhs = self.get_value(&instr.ops[0]) as i16;
+                        let rhs = self.get_value(&instr.ops[1]) as i16;
+                        let store = self.read_store(&mut pc);
+
+                        let result = lhs % rhs;
+                        self.store(result as u16, &store);
+                    },
                     _code => {
                         println!("Unimplemented long: {:?} pc {:x}", instr, pc);
                         return ZMachineExecResult::EXIT;
@@ -412,24 +604,40 @@ impl ZMachine {
                         //println!("print: {:?}", instr);
 
                         let mem = self.memory.borrow();
-                        let (message, offset) = mem.read_string(pc as u16);
+                        let (message, offset) = mem.read_string(pc);
                         pc += offset;
 
                         print!("{}", message);
+                    },
+                    3 => { // print ret (true)
+                        //println!("print ret: {:?}", instr);
+
+                        let (message, _) = {
+                            let mem = self.memory.borrow();
+                            mem.read_string(pc)
+                        };
+
+                        print!("{}", message);
+
+                        pc = self.return_val(1);
                     },
                     8 => { // ret popped
                         //println!("ret popped {:?}", instr);
                         let val = self.get_value(&Operand::Variable(Address::StackPointer));
                         pc = self.return_val(val);
                     },
+                    9 => { // pop
+                        //println!("pop {:?}", instr);
+                        let _ = self.get_value(&Operand::Variable(Address::StackPointer));
+                    },
                     11 => {
                         //println!("newline: {:?} pc: {:x}", instr, pc);
-                        
+
                         println!();
                     },
                     _code => {
                         println!("unimplemented no-op: {:?} pc: {:x}", instr, pc);
-                        return ZMachineExecResult::NEXT;
+                        return ZMachineExecResult::EXIT;
                     }
                 }
             },
@@ -441,8 +649,8 @@ impl ZMachine {
                         let val = self.get_value(&instr.ops[0]) as i16;
                         let offset = self.read_offset(&mut pc);
                         let cond = val == 0;
+                        //println!("val: {:x}", val);
 
-                        //println!("operands: {}", val);
                         if cond == offset.target {
                             self.branch(offset, &mut pc);
                         }
@@ -460,27 +668,37 @@ impl ZMachine {
 
                         if let Some(sib) = num {
                             self.store(sib as u16, &store);
-                            self.branch(offset, &mut pc);
+                            if *offset.target() {
+                                self.branch(offset, &mut pc);
+                            }
                         } else {
                             self.store(0, &store); // think i still need to do this?
+                            if !offset.target() {
+                                self.branch(offset, &mut pc);
+                            }
                         }
                     },
                     2 => { // get child
-                        //println!("get sibling {:?}", instr);
+                        //println!("get child {:?}", instr);
+                        let obj_num = self.get_value(&instr.ops[0]) as u8;
                         let store = self.read_store(&mut pc);
                         let offset = self.read_offset(&mut pc);
-                        let obj_num = self.get_value(&instr.ops[0]) as u8;
 
                         let num = {
                             let mem = self.memory.borrow();
                             mem.get_object_child(obj_num)
                         };
 
-                        if let Some(sib) = num {
-                            self.store(sib as u16, &store);
-                            self.branch(offset, &mut pc);
+                        if let Some(child) = num {
+                            self.store(child as u16, &store);
+                            if *offset.target() {
+                                self.branch(offset, &mut pc);
+                            }
                         } else {
                             self.store(0, &store); // think i still need to do this?
+                            if !*offset.target() {
+                                self.branch(offset, &mut pc);
+                            }
                         }
                     }
                     3 => { // get parent
@@ -495,6 +713,64 @@ impl ZMachine {
 
                         self.store(num as u16, &store);
                     },
+                    4 => { // get prop len
+                        //println!("get prop len {:?}", instr);
+                        let store = self.read_store(&mut pc);
+                        let prop_addr = self.get_value(&instr.ops[0]);
+
+                        let prop_len = {
+                            let mem = self. memory.borrow();
+                            mem.get_prop_len(prop_addr)
+                        };
+
+                        self.store(prop_len, &store);
+                    },
+                    5 => { //inc
+                        //println!("inc {:?}", instr);
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let var_addr = Address::of(var_num);
+                        let op = Operand::Variable(var_addr);
+
+                        let var = self.get_value(&op) as i16;
+                        let var = var.wrapping_add(1);
+
+                        let addr = Address::of(var_num);
+                        self.store(var as u16, &addr);
+                    },
+                    6 => { //dec
+                        //println!("dec {:?}", instr);
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let var_addr = Address::of(var_num);
+                        let op = Operand::Variable(var_addr);
+
+                        let var = self.get_value(&op) as i16;
+                        let var = var.wrapping_sub(1);
+
+                        let addr = Address::of(var_num);
+                        self.store(var as u16, &addr);
+                    },
+                    7 => { // print addr
+                        //println!("print addr: {:?}", instr);
+
+                        let addr = self.get_value(&instr.ops[0]);
+                        let mem = self.memory.borrow();
+                        let (message, _) = mem.read_string(addr as usize);
+
+                        print!("{}", message);
+                    },
+                    9 => { // remove obj
+                        println!("remove obj {:?}", instr);
+                        let obj_num = self.get_value(&instr.ops[0]);
+                        let mut mem = self.memory.borrow_mut();
+                        mem.remove_obj(obj_num as u8);
+                    },
+                    10 => { // print obj
+                        //println!("print obj {:?}", instr);
+                        let obj_num = self.get_value(&instr.ops[0]);
+                        let mem = self.memory.borrow();
+                        let name = mem.get_object_name(obj_num as u8).expect("Tried to get name of invalid object");
+                        print!("{}", name);
+                    },
                     11 => { // return value
                         //println!("return a val {:?}", instr);
                         let val = self.get_value(&instr.ops[0]);
@@ -505,6 +781,32 @@ impl ZMachine {
                         let jmp = self.get_value(&instr.ops[0]) as i16;
                         let offset = BranchOffset::new(true, Offset::Signed(jmp));
                         self.branch(offset, &mut pc);
+                    },
+                    13 => { // print paddr
+                        //println!("print paddr {:?}", instr);
+                        let addr = self.get_value(&instr.ops[0]);
+                        let mem = self.memory.borrow();
+                        let (message, _) = mem.read_string(addr as usize * 2);
+
+                        print!("{}", message);
+                    },
+                    14 => {
+                        //println!("load {:?}", instr);
+                        let addr_raw = self.get_value(&instr.ops[0]);
+                        let addr = Address::of(addr_raw);
+                        let op = Operand::Variable(Address::of(addr_raw));
+                        let val = self.get_value(&op);
+                        // in place - TODO: not like this >:(
+                        self.store(val, &addr);
+
+                        let store = self.read_store(&mut pc);
+                        self.store(val, &store);
+                    },
+                    15 => {//not
+                        let val = self.get_value(&instr.ops[0]);
+                        let store = self.read_store(&mut pc);
+                        let result = !val;
+                        self.store(result, &store);
                     },
                     _ => {
                         println!("Unimplemented short: {:?} pc {:x}", instr, pc);
@@ -517,34 +819,42 @@ impl ZMachine {
                     0 => { // call
                         //println!("call: {:x?}", instr);
                         let store = self.read_store(&mut pc);
-                        let mem = self.memory.borrow();
 
-                        let routine_addr = instr.ops[0].value() as usize * 2;
-                        let n_locals = mem.read_byte(routine_addr) as usize;
+                        let routine_addr = self.get_value(&instr.ops[0]) as usize * 2;
+                        if routine_addr == 0 {
+                            // nothing happens and the return value is 0
+                            self.store(0, &store);
+                        } else {
+                            let mem = self.memory.borrow();
+                            let n_locals = mem.read_byte(routine_addr) as usize;
 
-                        let mut locals: Vec<u16> = Vec::new();
-                        for i in 0..n_locals {
-                            locals.push(mem.read_word(routine_addr + 1 + i * 2).into());
+                            let mut locals: Vec<u16> = Vec::new();
+                            for i in 0..n_locals {
+                                locals.push(mem.read_word(routine_addr + 1 + i * 2).into());
+                            }
+
+                            for (n, op) in instr.ops[1..].iter().enumerate() {
+                                if locals.len() > n {
+                                    let val = self.get_value(op);
+                                    locals[n] = val;
+                                }
+                            }
+
+                            let mut stack = self.stack.borrow_mut();
+                            let idx = stack.len() - 1;
+                            let current_frame = &mut stack[idx];
+                            current_frame.pc = pc;
+
+                            stack.push(StackFrame {
+                                locals,
+                                stack: Vec::new(),
+                                pc: routine_addr as usize + 1 + n_locals as usize * 2,
+                                ret_addr: store,
+                            });
+
+                            // return true here, we've already updated the pc
+                            return ZMachineExecResult::NEXT;
                         }
-
-                        for (n, op) in instr.ops[1..].iter().enumerate() {
-                            locals[n] = op.value();
-                        }
-
-                        let mut stack = self.stack.borrow_mut();
-                        let idx = stack.len() - 1;
-                        let current_frame = &mut stack[idx];
-                        current_frame.pc = pc;
-
-                        stack.push(StackFrame {
-                            locals,
-                            stack: Vec::new(),
-                            pc: routine_addr as usize + 1 + n_locals as usize * 2,
-                            ret_addr: store,
-                        });
-
-                        // return true here, we've already updated the pc
-                        return ZMachineExecResult::NEXT;
                     },
                     1 => { // storew
                         //println!("storew {:?}", instr);
@@ -556,6 +866,7 @@ impl ZMachine {
                         self.store(val, &addr);
                     },
                     2 => { // storeb
+                        //println!("storeb {:?}", instr);
                         let addr = self.get_value(&instr.ops[0]);
                         let idx = self.get_value(&instr.ops[1]);
                         let val = self.get_value(&instr.ops[2]);
@@ -563,16 +874,17 @@ impl ZMachine {
 
                         self.store(val, &addr);
                     }
-                    3 => { // put prop 
+                    3 => { // put prop
                         //println!("put prop: instr {:?} pc {:x}", instr, pc);
                         let obj_num = self.get_value(&instr.ops[0]);
                         let prop_num = self.get_value(&instr.ops[1]) as u8;
                         let val = self.get_value(&instr.ops[2]);
-                        
+
                         let mut mem = self.memory.borrow_mut();
                         mem.put_prop(obj_num as u8, prop_num, val.into());
                     },
                     4 => { // read!
+                        //println!("read instr: {:?}", instr);
                         let text_buffer_addr = self.get_value(&instr.ops[0]);
                         let parse_buffer_addr = self.get_value(&instr.ops[1]);
 
@@ -590,23 +902,36 @@ impl ZMachine {
                         let val = self.get_value(&instr.ops[0]) as i16;
                         print!("{}", val as i16);
                     },
-                    9 => { // AND
-                        //println!("and {:?}", instr);
-                        let store = self.read_store(&mut pc);
-                        let lhs = self.get_value(&instr.ops[0]);
-                        let rhs = self.get_value(&instr.ops[1]);
-
-                        let result = lhs & rhs;
-
-                        self.store(result, &store);
+                    8 => { //push
+                        //println!("push {:?}", instr);
+                        let val = self.get_value(&instr.ops[0]);
+                        let mut stack = self.stack.borrow_mut();
+                        let idx = stack.len() - 1;
+                        let current_frame = &mut stack[idx];
+                        current_frame.stack.push(val);
                     },
+                    9 => { //pull
+                        //println!("pull {:?}", instr);
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let addr = Address::of(var_num);
+                        let op = Operand::Variable(Address::of(var_num));
+                        let val = self.get_value(&Operand::Variable(Address::StackPointer));
+
+                        let _ = self.get_value(&op);
+                        self.store(val, &addr);
+                    },
+                    /*
                     13 => { // var store
                         //println!("var store {:?}", instr);
-                        let addr = Address::of(instr.ops[0].value());
+                        let var_num = self.get_value(&instr.ops[0]);
+                        let addr = Address::of(var_num);
+                        let op = Operand::Variable(Address::of(var_num));
+                        // read first - if stack, need to pop
+                        let _ = self.get_value(&op);
                         let val = self.get_value(&instr.ops[1]);
 
                         self.store(val, &addr);
-                    },
+                    },*/
                     _code => {
                         println!("Unimplemented variable: instr {:?} pc {:x}", instr, pc);
                         return ZMachineExecResult::EXIT;
@@ -626,7 +951,8 @@ impl ZMachine {
 
     fn read_offset(&self, pc: &mut usize) -> BranchOffset {
         let mem = self.memory.borrow();
-        
+
+        let b = mem.read_byte(*pc);
         let val = mem.read_word(*pc).into();
         let branch_label = BranchLabel::new(val);
 
@@ -638,7 +964,7 @@ impl ZMachine {
         } else {
             *pc += 2; // branch was 2 bytes
             if branch_label.sign.is_set() {
-                (16383 - branch_label.signed_value.value_of()) as i16 * -1
+                (16384 - branch_label.signed_value.value_of()) as i16 * -1
             } else {
                 branch_label.signed_value.value_of() as i16
             }
@@ -747,7 +1073,7 @@ impl ZMachine {
                     },
                     Address::Byte(addr) => {
                         let mem = self.memory.borrow();
-                        mem.read_byte(*addr as usize).into()
+                        mem.read_byte(*addr as usize) as u16
                     }
                 }
             },

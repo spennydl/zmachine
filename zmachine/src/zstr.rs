@@ -92,9 +92,21 @@ impl Alphabet {
             }
         }
     }
+
+    fn lookup(n: u8) -> (Alphabet, u8) {
+        if let Some(idx) = ALPH_A0.chars().position(|c| c as u8 == n) {
+            (Alphabet::A0, idx as u8 + 6)
+        } else if let Some(idx) = ALPH_A1.chars().position(|c| c as u8 == n) {
+            (Alphabet::A1, idx as u8 + 6)
+        } else if let Some(idx) = ALPH_A2.chars().position(|c| c as u8 == n) {
+            (Alphabet::A2, idx as u8 + 6)
+        } else {
+            (Alphabet::A0, 0)
+        }
+    }
 }
 
-enum ZChar {
+pub enum ZChar {
     Shift(u8),
     Abbrev(u8),
     Char(u8)
@@ -110,6 +122,46 @@ impl ZChar {
             ZChar::Shift(c)
         } else {
             ZChar::Char(c)
+        }
+    }
+
+    pub fn encode(c: u8) -> Vec<Self> {
+        let mut ret: Vec<ZChar> = Vec::new();
+        let (alph, ch) = Alphabet::lookup(c);
+
+        match alph {
+            Alphabet::A0 => {
+                ret.push(ZChar::Char(ch));
+                ret
+            },
+            Alphabet::A1 => {
+                ret.push(ZChar::Shift(4));
+                ret.push(ZChar::Char(ch));
+                ret
+            },
+            Alphabet::A2 => {
+                ret.push(ZChar::Shift(5));
+                ret.push(ZChar::Char(ch));
+                ret
+            },
+        }
+    }
+
+    pub fn value(&self) -> &u8 {
+        match self {
+            ZChar::Char(c)
+            | ZChar::Abbrev(c)
+            | ZChar::Shift(c) => c,
+        }
+    }
+}
+
+impl From<ZChar> for u8 {
+    fn from(zc: ZChar) -> u8 {
+        match zc {
+            ZChar::Char(c)
+            | ZChar::Abbrev(c)
+            | ZChar::Shift(c) => c,
         }
     }
 }

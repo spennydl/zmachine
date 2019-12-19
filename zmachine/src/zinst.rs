@@ -103,7 +103,7 @@ impl Address {
     pub(crate) fn addr(&self) -> u16 {
         match self {
             Address::StackPointer => 0,
-            Address::Local(v) => *v,
+            Address::Local(v) => *v + 1,
             Address::Global(v) => *v,
             Address::Word(v) => *v,
             Address::Byte(v) => *v,
@@ -212,9 +212,15 @@ impl Instruction {
                     offset += b;
                 }
 
+                let ty = if !instr.is_2op.is_set() {
+                    InstructionType::Long
+                } else {
+                    InstructionType::Variable
+                };
+
                 (Instruction {
                     opcode: instr.opcode.value_of() as u8,
-                    ty: InstructionType::Variable,
+                    ty,
                     ops: operands,
                 }, offset)
             }

@@ -60,20 +60,23 @@ macro_rules! bitstruct {
 
             #[derive(Debug)]
             pub struct $name {
-                val: $numtype,
                 $(pub $field: $type),+
             }
 
             impl $name {
                 pub fn new(val: $numtype) -> $name {
                     $name {
-                        val,
                         $($field: $type::new(val)),+
                     }
                 }
 
                 pub fn get(&self) -> $numtype {
-                    self.val
+                    let mut output: $numtype = 0;
+                    $(
+                        self.$field.write(&mut output);
+                    )+
+
+                    output
                 }
             }
         )+
@@ -114,5 +117,9 @@ where
     pub fn set(&mut self, val: N) {
         let val = (val << O::to()) & M::to();
         self.val = self.val & !M::to() | val;
+    }
+
+    pub fn write(&self, out: &mut N) {
+        *out = *out & !M::to() | (self.val & M::to());
     }
 }
