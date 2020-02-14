@@ -564,7 +564,7 @@ impl ZMemory {
 
         let property = ZObjectProps::new(&self.bytes[addr..]);
 
-        property.idx_of(prop_num).unwrap_or(0)
+        addr as u16 + property.idx_of(prop_num).unwrap_or(0)
     }
 
     pub(crate) fn get_prop_len(&self, prop_addr: u16) -> u16 {
