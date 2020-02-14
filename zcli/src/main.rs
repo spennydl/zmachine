@@ -4,6 +4,8 @@ use std::io;
 use std::io::Write;
 use std::env;
 
+use textwrap::fill;
+
 fn main() {
     let mut machine = ZMachine::new();
     let args: Vec<String> = env::args().collect();
@@ -20,7 +22,9 @@ fn main() {
                 loop {
                     match machine.exec(&mut output) {
                         ZMachineExecResult::NeedInput => {
-                            io::stdout().write_all(&output[..]).unwrap();
+                            let out = String::from_utf8(output).unwrap();
+                            let wrapped = format!("{}", fill(&out, 80));
+                            io::stdout().write_all(wrapped.as_bytes()).unwrap();
                             io::stdout().flush().unwrap();
                             output = Vec::new();
 
