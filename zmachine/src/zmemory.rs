@@ -376,24 +376,24 @@ impl ZMemory {
     }
 
     pub(crate) fn reset(&mut self, data: Vec<u8>) {
-        println!("Resetting mem, len: {}", data.len());
+        //println!("Resetting mem, len: {}", data.len());
         self.bytes = data;
 
         let globals_idx = self.read_word(0x0C);
         self.globals_idx = u16::from(globals_idx) as usize;
-        println!("globals at {:x}", self.globals_idx);
+        //println!("globals at {:x}", self.globals_idx);
 
         let objects_idx = self.read_word(0x0A);
         self.objects_idx = u16::from(objects_idx) as usize;
-        println!("objects at {:x}", self.objects_idx);
+        //println!("objects at {:x}", self.objects_idx);
 
         let abbrev_idx = self.read_word(0x18);
         self.abbrev_idx = u16::from(abbrev_idx) as usize;
-        println!("abbreviations table at {:x}", self.abbrev_idx);
+        //println!("abbreviations table at {:x}", self.abbrev_idx);
 
         let dictionary_idx = self.read_word(0x08);
         self.dictionary_idx = u16::from(dictionary_idx) as usize;
-        println!("dictionary table at {:x}", self.dictionary_idx);
+        //println!("dictionary table at {:x}", self.dictionary_idx);
     }
 
     fn set_object_parent(&mut self, obj_num: u8, new_parent: u8) {
@@ -411,38 +411,28 @@ impl ZMemory {
     }
 
     fn set_object_sibling(&mut self, obj_num: u8, new_sibling: u8) {
-        //println!("setting obj {} sibling to {}", obj_num, new_sibling);
         ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object_mut(obj_num)
             .set_sibling(new_sibling);
     }
 
     pub(crate) fn get_object_parent(&self, obj_num: u8) -> u8 {
-        //println!("getting parent of obj {}", obj_num);
-        let ret = ZObjectTable::new(&self.bytes[self.objects_idx..])
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
             .get_object(obj_num)
             .parent_num()
-            .unwrap_or(0);
-        //println!("got object {} parent, is {}", obj_num, ret);
-        ret
+            .unwrap_or(0)
     }
 
     pub(crate) fn get_object_child(&self, obj_num: u8) -> Option<u8> {
-        //println!("getting child of obj {}", obj_num);
-        let ret = ZObjectTable::new(&self.bytes[self.objects_idx..])
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
             .get_object(obj_num)
-            .child_num();
-        //println!("got object {} child, is {:?}", obj_num, ret);
-        ret
+            .child_num()
     }
 
     pub(crate) fn get_object_sibling(&self, obj_num: u8) -> Option<u8> {
-        //println!("getting sibling of obj {}", obj_num);
-        let ret = ZObjectTable::new(&self.bytes[self.objects_idx..])
+        ZObjectTable::new(&self.bytes[self.objects_idx..])
             .get_object(obj_num)
-            .sibling_num();
-        //println!("got object {} sibling, is {:?}", obj_num, ret);
-        ret
+            .sibling_num()
     }
 
     pub(crate) fn get_object_name(&self, obj_num: u8) -> Option<String> {
@@ -508,30 +498,25 @@ impl ZMemory {
         let obj = table.get_object(obj_num);
 
         let ret = obj.attributes & (0x80000000 >> attr as u32) > 0;
-        //println!("tested object {} attr {}: {}", obj_num, attr, ret);
         ret
     }
 
     pub(crate) fn set_attr(&mut self, obj_num: u8, attr: u8) {
-        //println!("setting obj {} attr {}", obj_num, attr);
         ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object_mut(obj_num)
             .set_attr(attr);
     }
 
     pub(crate) fn clear_attr(&mut self, obj_num: u8, attr: u8) {
-        //println!("clearing obj {} attr {}", obj_num, attr);
         ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object_mut(obj_num)
             .clear_attr(attr);
     }
 
     pub(crate) fn put_prop(&mut self, obj_num: u8, prop_num: u8, val: ZWord) {
-        //println!("setting prop {} of obj {}", prop_num, obj_num);
         let address: u16 = ZObjectTable::new(&mut self.bytes[self.objects_idx..])
             .get_object(obj_num)
             .properties.into();
-        //println!("prop is at {:x}", address);
         let n_header = self.bytes[address as usize] as u16 * 2;
         let addr = address as usize + n_header as usize + 1;
 
@@ -541,7 +526,6 @@ impl ZMemory {
     }
 
     pub(crate) fn get_prop(&self, obj_num: u8, prop_num: u8) -> ZWord {
-        //println!("getting prop {} of obj {}", prop_num, obj_num);
         let address: u16 = ZObjectTable::new(&self.bytes[self.objects_idx..])
             .get_object(obj_num)
             .properties.into();
@@ -560,7 +544,6 @@ impl ZMemory {
     }
 
     pub(crate) fn get_next_prop(&self, obj_num: u8, prop_num: u8) -> u8 {
-        //println!("getting prop {} of obj {}", prop_num, obj_num);
         let address: u16 = ZObjectTable::new(&self.bytes[self.objects_idx..])
             .get_object(obj_num)
             .properties.into();
@@ -569,11 +552,7 @@ impl ZMemory {
 
         let property = ZObjectProps::new(&self.bytes[addr..]);
 
-        if let Some(p) = property.after(prop_num) {
-            p
-        } else {
-            panic!("couldn't get next prop");
-        }
+        property.after(prop_num).expect("Couldn't get next property")
     }
 
     pub(crate) fn get_prop_addr(&self, obj_num: u8, prop_num: u8) -> u16 {
@@ -585,15 +564,10 @@ impl ZMemory {
 
         let property = ZObjectProps::new(&self.bytes[addr..]);
 
-        if let Some(idx) = property.idx_of(prop_num) {
-            addr as u16 + idx
-        } else {
-            0
-        }
+        property.idx_of(prop_num).unwrap_or(0)
     }
 
     pub(crate) fn get_prop_len(&self, prop_addr: u16) -> u16 {
-        //println!("getting prop len for prop at addr {:x}", prop_addr);
         if prop_addr == 0 {
             0
         } else {

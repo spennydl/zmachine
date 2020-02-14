@@ -223,6 +223,13 @@ impl ZString {
                 let abbrev_iter = ZCharIter::new(&mem[addr as usize * 2..]);
                 let (_, chs) = ZString::parse_into(abbrev_iter, mem, abbrev_table, chars);
                 chars = chs;
+            } else if let Some(ref mut zsc) = zscii {
+                zsc.push_raw_zchar(zc);
+                if let Some(c) = zsc.get() {
+                    chars.push(c);
+                    alph = Alphabet::A0;
+                    zscii.take();
+                }
             } else {
                 match ZChar::new(zc) {
                     ZChar::Shift(shift_char) => {
@@ -232,22 +239,13 @@ impl ZString {
                         abbrev_idx.replace(32 * (aidx as usize - 1));
                     },
                     ZChar::Char(c) => {
-                        if let Some(ref mut zsc) = zscii {
-                            zsc.push_raw_zchar(c);
-                            if let Some(c) = zsc.get() {
-                                chars.push(c);
-                                alph = Alphabet::A0;
-                                zscii.take();
-                            }
+                        if c == 6 && alph == Alphabet::A2 {
+                            zscii.replace(ZSCIIChar::new());
                         } else {
-                            if c == 6 && alph == Alphabet::A2 {
-                                zscii.replace(ZSCIIChar::new());
-                            } else {
-                                let ch = alph.get(c);
-                                chars.push(ch);
+                            let ch = alph.get(c);
+                            chars.push(ch);
 
-                                alph = Alphabet::A0;
-                            }
+                            alph = Alphabet::A0;
                         }
                     },
                 }

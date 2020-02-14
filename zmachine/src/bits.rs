@@ -63,6 +63,7 @@ macro_rules! bitstruct {
                 $(pub $field: $type),+
             }
 
+            #[allow(dead_code)]
             impl $name {
                 pub fn new(val: $numtype) -> $name {
                     $name {
